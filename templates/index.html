@@ -87,7 +87,9 @@
       <div class="btn-row" style="margin-top:10px;">
         <button class="btn btn-ghost" id="btn-add-slot" onclick="addSlot()" style="font-size:13px;">＋ 슬롯 추가 (최대 20개)</button>
       </div>
-      <div class="btn-row" style="margin-top:14px;">
+      <div class="btn-row gen-btn-row" style="margin-top:14px;">
+        <label class="gen-char-label" for="input-target-chars-cn">글자수</label>
+        <input type="number" class="gen-char-input" id="input-target-chars-cn" min="300" max="12000" step="100" inputmode="numeric" placeholder="기본" title="비우면 기존 분량. 숫자 입력 시 공백 제외 기준으로 대략 그 길이에 맞춤(300~12000)" />
         <button class="btn btn-primary" id="btn-generate-cn" onclick="generateFromCardnews()">✨ 카드뉴스로 본문 생성</button>
         <button class="btn btn-ghost" onclick="clearAllSlots()">✕ 전체 초기화</button>
       </div>
@@ -166,7 +168,9 @@
       <div class="keyword-hint">💡 줄바꿈 = 글 구분 · 쉼표 = 한 글에 여러 키워드 · 최대 20개 글</div>
       </div>
 
-      <div class="btn-row">
+      <div class="btn-row gen-btn-row">
+        <label class="gen-char-label" for="input-target-chars-kw">글자수</label>
+        <input type="number" class="gen-char-input" id="input-target-chars-kw" min="300" max="12000" step="100" inputmode="numeric" placeholder="기본" title="비우면 기존 분량. 숫자 입력 시 공백 제외 기준으로 대략 그 길이에 맞춤(300~12000)" />
         <button class="btn btn-primary" id="btn-generate" onclick="generateAll()">✨ 본문 생성</button>
         <button class="btn btn-ghost" onclick="resetAll()">↺ 초기화</button>
       </div>
@@ -766,10 +770,13 @@
           mime_type: f.type || 'image/jpeg',
         })));
 
+        const cnPayload = { images: imagesPayload, clinic_name: clinicName };
+        const tcCn = getOptionalTargetCharCount('input-target-chars-cn');
+        if (tcCn !== undefined) cnPayload.target_char_count = tcCn;
         const res = await fetch('/generate_cardnews', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ images: imagesPayload, clinic_name: clinicName }),
+          body: JSON.stringify(cnPayload),
         });
         const data = await res.json();
         if (data.error) throw new Error(data.error);
@@ -805,6 +812,37 @@
       const data = await res.json();
       clinicList = data.clinics || [];
     } catch {}
+  }
+
+  /** 본문 생성 요청용: 비우면 서버 기본 분량 */
+  function getOptionalTargetCharCount(inputId) {
+    const el = document.getElementById(inputId);
+    if (!el) return undefined;
+    const raw = String(el.value || '').trim();
+    if (!raw) return undefined;
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n) || n < 1) return undefined;
+    return n;
+  }
+
+  /** 카드에 표시: 이미지 한 줄 제외 후 공백 제외 글자 수 */
+  function countBodyCharsForLabel(body) {
+    const s = String(body || '');
+    const lines = s.split(/\r?\n/);
+    const textOnly = lines.filter(l => !/^\s*\[이미지:\s*[^\]]+\]\s*$/.test(l)).join('\n');
+    return textOnly.replace(/\s/g, '').length;
+  }
+
+  function updateBodyCharCountLabel(i) {
+    const el = document.getElementById(`body-char-count-${i}`);
+    if (!el) return;
+    const ta = document.getElementById(`body-${i}`);
+    if (!ta) {
+      el.textContent = '글자수: —';
+      return;
+    }
+    const n = countBodyCharsForLabel(ta.value);
+    el.textContent = '글자수: ' + n.toLocaleString('ko-KR') + '자';
   }
 
   // ── 본문 생성 ──────────────────────────────────────────────────
@@ -866,10 +904,13 @@
       const i = startIdx + offset;
       updateCardState(i, 'loading', '생성 중...');
       try {
+        const genPayload = { keywords: kws, clinic_name: clinicName };
+        const tcKw = getOptionalTargetCharCount('input-target-chars-kw');
+        if (tcKw !== undefined) genPayload.target_char_count = tcKw;
         const res = await fetch('/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keywords: kws, clinic_name: clinicName })
+          body: JSON.stringify(genPayload)
         });
         const data = await res.json();
         if (data.error) throw new Error(data.error);
@@ -978,7 +1019,10 @@
             <div class="preview-body" id="preview-body-${i}"></div>
           </div>
           <div id="review-issues-${i}" style="display:none"></div>
-          <div class="card-status-msg" id="card-msg-${i}"></div>
+          <div class="result-card-footer-meta">
+            <div class="card-status-msg" id="card-msg-${i}"></div>
+            <div class="body-char-count-badge" id="body-char-count-${i}">글자수: —</div>
+          </div>
         </div>`;
       list.appendChild(div);
       syncCardPhaseBars(i);
@@ -1012,8 +1056,12 @@
     // 미리보기 내용 업데이트
     updatePreview(i);
 
-    // 본문 편집 시 미리보기 갱신
-    bodyEl.addEventListener('input', () => updatePreview(i));
+    // 본문 편집 시 미리보기·글자수 갱신
+    bodyEl.addEventListener('input', () => {
+      updatePreview(i);
+      updateBodyCharCountLabel(i);
+    });
+    updateBodyCharCountLabel(i);
 
     const rb = document.getElementById(`review-badge-${i}`);
     if (rb) {

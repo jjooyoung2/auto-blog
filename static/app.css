@@ -422,7 +422,26 @@
       padding: 12px; font-size: 13px; font-family: inherit; line-height: 1.8; resize: vertical;
     }
     .result-card-body textarea:focus { outline: none; border-color: var(--primary); }
-    .card-status-msg { font-size: 12px; margin-top: 6px; color: var(--muted); }
+    .card-status-msg { font-size: 12px; margin-top: 0; color: var(--muted); }
+    .result-card-footer-meta {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: 10px; margin-top: 10px; width: 100%;
+    }
+    .result-card-footer-meta .card-status-msg { flex: 1 1 auto; min-width: 0; }
+    .body-char-count-badge {
+      flex-shrink: 0; font-size: 12px; font-weight: 700; padding: 5px 12px; border-radius: 6px;
+      background: #dc2626; color: #fff; letter-spacing: 0.02em;
+    }
+    .gen-btn-row {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    }
+    .gen-char-label {
+      font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap;
+    }
+    .gen-char-input {
+      width: 100px; padding: 8px 10px; font-size: 13px; border-radius: 8px;
+      border: 1.5px solid var(--border); font-family: inherit; background: #fff;
+    }
 
     /* 전체 진행 상태 바 */
     #queue-status { display: none; }

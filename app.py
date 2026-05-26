@@ -202,7 +202,27 @@ logging.getLogger("werkzeug").addFilter(_NoStatusLog())
 
 
 
-API_KEY = "AIzaSyB-CcTKke6r_OwqCRcSI8Pi7TUkGmTeId0"
+# Gemini — 소스에 키를 넣지 마세요. .env 의 GEMINI_API_KEY(또는 GOOGLE_API_KEY)만 사용합니다.
+
+API_KEY = (
+
+    os.environ.get("GEMINI_API_KEY", "").strip()
+
+    or os.environ.get("GOOGLE_API_KEY", "").strip()
+
+    or os.environ.get("GENAI_API_KEY", "").strip()
+
+)
+
+if not API_KEY:
+
+    raise RuntimeError(
+
+        "Gemini API 키가 설정되지 않았습니다. 프로젝트 루트 .env 파일에 GEMINI_API_KEY=발급받은키 를 넣고 서버를 다시 실행하세요."
+
+    )
+
+
 
 MODEL = "gemini-2.5-flash-lite"
 
@@ -483,7 +503,187 @@ def _load_image_part(img_path: str, filename: str) -> list:
 
 
 
-def generate_blog_content(keywords: list, clinic_name: str = "", max_retries: int = 5) -> dict:
+def _parse_target_char_count(raw) -> int | None:
+
+    """요청 JSON에서 목표 본문 글자 수. 없음/비유효 시 None, 아니면 안전 범위로 클램프."""
+
+    if raw is None:
+
+        return None
+
+    try:
+
+        n = int(raw)
+
+    except (TypeError, ValueError):
+
+        return None
+
+    if n <= 0:
+
+        return None
+
+    return max(300, min(n, 12000))
+
+
+
+def _blog_body_metric_chars(body: str) -> int:
+
+    """프론트 표시와 동일: [이미지: …] 단독 줄 제외 후 공백 제외 글자 수."""
+
+    if not (body or "").strip():
+
+        return 0
+
+    lines = (body or "").replace("\r\n", "\n").split("\n")
+
+    kept = []
+
+    for ln in lines:
+
+        if re.match(r"^\s*\[이미지:\s*[^\]]+\]\s*$", ln):
+
+            continue
+
+        kept.append(ln)
+
+    core = "\n".join(kept)
+
+    return len(re.sub(r"\s+", "", core))
+
+
+
+def _expand_blog_body_for_length(
+
+    title: str,
+
+    body: str,
+
+    target: int,
+
+    metric_before: int,
+
+    system_instr: str,
+
+    use_model: str,
+
+    image_prefix_parts: list | None,
+
+) -> tuple[str, str]:
+
+    """1차 본문이 목표 대비 지나치게 짧을 때 한 번 더 생성해 분량을 맞춤."""
+
+    shortage = max(0, target - metric_before)
+
+    user_txt = (
+
+        "[분량 보강]\n"
+
+        "아래는 방금 작성한 블로그 초안(제목·본문)입니다.\n"
+
+        f"'제목:' 줄과 [이미지: 파일명] 형태의 줄은 수정·삭제하지 말고 그대로 유지하세요.\n"
+
+        f"공백을 제외한 본문 글자 수(이미지 전용 줄 제외)가 현재 약 {metric_before}자이고, 목표는 약 {target}자입니다.\n"
+
+        f"부족한 약 {shortage}자 이상을 각 소제목 아래 설명을 구체화하거나 Q&A·주의사항으로 자연스럽게 채워,"
+
+        f" 목표에 가깝게(가능하면 {int(target * 0.93)}자 이상) 맞춰 주세요. 허위 진료 사례·허위 수치는 쓰지 마세요.\n"
+
+        "응답은 반드시 첫 줄에 '제목: …' 한 줄을 두고, 한 줄 띄운 뒤 전체 본문을 이어서 출력하세요.\n\n"
+
+        f"제목: {title}\n\n{body}"
+
+    )
+
+    sis = (
+
+        system_instr
+
+        + "\n\n지금은 '분량 보강' 단계입니다. 위 지시를 최우선으로 하고, 지정한 이미지 줄은 절대 바꾸지 마세요."
+
+    )
+
+    has_img_prefix = bool(image_prefix_parts)
+
+    parts = (image_prefix_parts or []) + [types.Part.from_text(text=user_txt)]
+
+    contents = parts if has_img_prefix else user_txt
+
+    response = None
+
+    cur = use_model
+
+    for attempt in range(1, 4):
+
+        try:
+
+            response = client.models.generate_content(
+
+                model=cur,
+
+                contents=contents,
+
+                config=types.GenerateContentConfig(system_instruction=sis),
+
+            )
+
+            break
+
+        except Exception as e:
+
+            if ("503" in str(e) or "UNAVAILABLE" in str(e)) and attempt < 3:
+
+                if attempt >= 2:
+
+                    cur = MULTIMODAL_FALLBACK if cur == MULTIMODAL_MODEL else MODEL
+
+                time.sleep(2**attempt)
+
+            else:
+
+                raise
+
+    if response is None or not (response.text or "").strip():
+
+        return title, body
+
+    raw = response.text
+
+    new_title = title
+
+    new_body = raw
+
+    for line in raw.splitlines():
+
+        stripped = re.sub(r"^제목\s*:\s*", "", line)
+
+        if stripped != line:
+
+            new_title = stripped.strip()
+
+            new_body = raw[raw.index(line) + len(line) :].strip()
+
+            break
+
+    if not new_body.strip():
+
+        return title, body
+
+    return new_title, new_body
+
+
+
+def generate_blog_content(
+
+    keywords: list,
+
+    clinic_name: str = "",
+
+    max_retries: int = 5,
+
+    target_char_count: int | None = None,
+
+) -> dict:
 
     """keywords: 하나 이상의 키워드 리스트. 여러 개면 하나의 글에 모두 녹여쓰기."""
 
@@ -661,6 +861,28 @@ def generate_blog_content(keywords: list, clinic_name: str = "", max_retries: in
 
 
 
+    if target_char_count:
+
+        n = target_char_count
+
+        floor_n = int(n * 0.9)
+
+        prompt_text += (
+
+            f"\n\n[분량 제약 — 필수]\n"
+
+            f"본문만 기준으로, 줄바꿈·스페이스·탭 등 공백을 제외한 글자 수가 **약 {n}자**가 되게 작성하세요.\n"
+
+            f"같은 기준으로 **최소 {floor_n}자 이상**이 되어야 합니다. 이보다 짧으면 요구를 충족하지 못한 것입니다.\n"
+
+            f"'[이미지: 파일명]' 형태의 **한 줄**은 글자 수 계산에서 제외합니다(해당 줄은 그대로 두세요).\n"
+
+            "소제목별로 설명·예시·주의사항을 충분히 넣어 분량을 채우세요."
+
+        )
+
+
+
     # ── contents 구성: 멀티모달(이미지+텍스트) or 텍스트만 ──────────────
 
     if use_multimodal:
@@ -783,13 +1005,53 @@ def generate_blog_content(keywords: list, clinic_name: str = "", max_retries: in
 
     # ?동 ?정 ?스 (치과??일, ??, 말투 ????
 
-    if clinic_name:
+        if clinic_name:
 
-        title, body = _apply_fixes(title, body, clinic_name)
+            title, body = _apply_fixes(title, body, clinic_name)
 
-        if selected_images:
+            if selected_images:
 
-            body = normalize_image_markers(body, selected_images)
+                body = normalize_image_markers(body, selected_images)
+
+
+
+    if target_char_count:
+
+        m0 = _blog_body_metric_chars(body)
+
+        if m0 < int(target_char_count * 0.88):
+
+            title, body = _expand_blog_body_for_length(
+
+                title,
+
+                body,
+
+                target_char_count,
+
+                m0,
+
+                system_instr,
+
+                use_model,
+
+                image_parts if use_multimodal else None,
+
+            )
+
+            body = strip_markdown(body)
+
+            if selected_images:
+
+                body = normalize_image_markers(body, selected_images)
+
+            if clinic_name:
+
+                title, body = _apply_fixes(title, body, clinic_name)
+
+                if selected_images:
+
+                    body = normalize_image_markers(body, selected_images)
 
 
 
@@ -3607,9 +3869,11 @@ def generate():
 
         return jsonify({"error": "키워드를 입력해주세요."}), 400
 
+    target_chars = _parse_target_char_count(data.get("target_char_count"))
+
     try:
 
-        result = generate_blog_content(keywords, clinic_name)
+        result = generate_blog_content(keywords, clinic_name, target_char_count=target_chars)
 
         return jsonify(result)
 
@@ -3703,25 +3967,37 @@ def generate_cardnews():
 
     image_list_str = ", ".join(saved_filenames)
 
-    content_parts.append(types.Part.from_text(
+    target_chars = _parse_target_char_count(data.get("target_char_count"))
 
-        text=(
+    user_cn_text = (
 
-            "위 카드뉴스 이미지들의 내용을 바탕으로 블로그 본문을 작성해주세요.\n"
+        "위 카드뉴스 이미지들의 내용을 바탕으로 블로그 본문을 작성해주세요.\n"
 
-            "도입부(첫 소제목 1. 전) 마지막에는 반드시 첫 번째 파일을 "
+        "도입부(첫 소제목 1. 전) 마지막에는 반드시 첫 번째 파일을 "
 
-            f"[이미지: {saved_filenames[0]}] 한 줄로 넣고, "
+        f"[이미지: {saved_filenames[0]}] 한 줄로 넣고, "
 
-            "그 다음 소제목 1~4 각 본문 뒤에 남은 이미지를 내용에 맞게 배치하세요.\n"
+        "그 다음 소제목 1~4 각 본문 뒤에 남은 이미지를 내용에 맞게 배치하세요.\n"
 
-            f"아래 {len(saved_filenames)}개 파일명을 모두 빠짐없이 정확히 한 번씩 [이미지: 파일명]으로 쓰세요(순서): "
+        f"아래 {len(saved_filenames)}개 파일명을 모두 빠짐없이 정확히 한 번씩 [이미지: 파일명]으로 쓰세요(순서): "
 
-            f"{image_list_str}"
+        f"{image_list_str}"
+
+    )
+
+    if target_chars:
+
+        user_cn_text += (
+
+            f"\n\n[분량 제약 — 필수] 공백 제외·이미지 전용 줄 제외 기준으로 본문이 **약 {target_chars}자**,"
+
+            f" 같은 기준 **최소 {int(target_chars * 0.9)}자 이상**이 되게 작성하세요. 짧으면 요구 미충족입니다."
+
+            f" '[이미지: 파일명]' 줄은 글자 수에서 제외합니다."
 
         )
 
-    ))
+    content_parts.append(types.Part.from_text(text=user_cn_text))
 
 
 
@@ -3816,6 +4092,46 @@ def generate_cardnews():
 
 
         body = ensure_cardnews_image_markers(body, saved_filenames)
+
+
+
+        if target_chars:
+
+            m_cn = _blog_body_metric_chars(body)
+
+            if m_cn < int(target_chars * 0.88):
+
+                prefix_parts = content_parts[:-1] if len(content_parts) > 1 else None
+
+                title, body = _expand_blog_body_for_length(
+
+                    title,
+
+                    body,
+
+                    target_chars,
+
+                    m_cn,
+
+                    system_instr,
+
+                    cur_model,
+
+                    prefix_parts,
+
+                )
+
+                body = strip_markdown(body)
+
+                body = normalize_image_markers(body, saved_filenames)
+
+                if clinic_name:
+
+                    title, body = _apply_fixes(title, body, clinic_name)
+
+                    body = normalize_image_markers(body, saved_filenames)
+
+                body = ensure_cardnews_image_markers(body, saved_filenames)
 
 
 
