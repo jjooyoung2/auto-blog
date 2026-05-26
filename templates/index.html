@@ -1,0 +1,1713 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>치과 블로그 자동화</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
+</head>
+<body>
+
+<header>
+  <div class="logo">🦷 치과 블로그 <span>자동화</span></div>
+  <p>키워드 입력 → AI 본문 생성 → 검토 후 선택 포스팅</p>
+</header>
+
+{% if chrome_remote_addr %}
+<div class="chrome-remote-info" role="status">
+  <p class="chrome-remote-info-title"><strong>Chrome 원격 연결 모드</strong> — 주소: <code>{{ chrome_remote_addr }}</code></p>
+  <p class="chrome-remote-info-lead">이 모드에서는 프로그램이 <strong>새 Chrome을 띄우지 않고</strong>, 이미 켜 둔 Chrome에만 붙습니다. 같은 프로필로 두 번 실행하는 문제를 피할 수 있습니다.</p>
+  <p class="chrome-remote-info-lead">Chrome을 <strong>앱 실행보다 먼저</strong> 아래와 비슷하게 띄워 두세요. (포트는 <code>CHROME_REMOTE_DEBUGGING</code>과 같게)</p>
+  <pre class="chrome-remote-cmd">chrome.exe --remote-debugging-port=9222 --user-data-dir="…\blog_write_test\chrome_profile"</pre>
+  <p class="chrome-remote-info-foot"><code>chrome_profile</code> 폴더 경로는 이 프로그램이 쓰는 프로필과 동일해야 로그인 세션이 이어집니다.</p>
+</div>
+{% endif %}
+
+<div id="startup-hints-banner" class="startup-hints-banner{% if startup_hints_inline %} visible{% endif %}" role="alert"{% if not startup_hints_inline %} hidden{% endif %}>
+{% if startup_hints_inline %}
+  <p class="startup-hints-title"><strong>Chrome이 이미 이 프로필로 실행 중입니다</strong></p>
+  <ul class="startup-hints-list">
+    {% for h in startup_hints_inline %}
+    <li>{{ h.message }}</li>
+    {% endfor %}
+  </ul>
+  <p class="startup-hints-foot">위에서 말한 Chrome 창을 <strong>모두 닫은 뒤</strong> 새로고침(F5)하면 이 안내가 사라집니다.</p>
+{% endif %}
+</div>
+
+<div class="container">
+
+  <div class="card accounts-unified-card">
+    <div class="accounts-card-title">계정관리</div>
+    <p class="accounts-card-lead">
+      네이버 블로그에 올릴 <strong>치과별 계정</strong>을 여기서 관리합니다. 입력한 내용은 이 컴퓨터에만 저장되며,
+      프로그램을 다시 켜도 그대로 이어집니다. 각 줄을 입력한 뒤 <strong>저장</strong>을 눌러 반영해 주세요.
+      <strong>작업</strong> 열의 라디오로 지금 쓸 계정을 하나만 고르면, 아래 본문 생성·포스팅·키워드용 이미지 폴더가 그 계정 기준으로 맞춰집니다.
+      (이 PC에서만 쓰는 화면이라 비밀번호도 그대로 보입니다.)
+    </p>
+    <div class="accounts-table-wrap">
+      <table class="accounts-manage-table">
+        <thead>
+          <tr>
+            <th class="accounts-th-active" title="본문 생성·포스팅·키워드 이미지 폴더에 쓸 계정">작업</th>
+            <th>치과명</th>
+            <th>네이버 ID</th>
+            <th>비밀번호</th>
+            <th class="accounts-th-actions"></th>
+          </tr>
+        </thead>
+        <tbody id="multi-accounts-tbody"></tbody>
+      </table>
+      <p id="accounts-empty-hint" class="accounts-empty-hint" style="display:none;">등록된 계정이 없습니다. 아래 <strong>계정 추가</strong>로 줄을 만든 뒤, 입력하고 <strong>저장</strong>을 눌러 주세요.</p>
+    </div>
+    <div class="accounts-toolbar">
+      <span class="account-save-status" id="multi-accounts-save-status"></span>
+      <button type="button" class="btn btn-account-add" onclick="addMultiAccountRow()">계정 추가</button>
+    </div>
+  </div>
+
+  <!-- 블로그 본문 생성 -->
+  <div class="card">
+    <div class="card-title">블로그 본문 생성</div>
+    <p class="blog-gen-howto">
+      <strong>사용 순서:</strong> 위 <strong>계정관리</strong>에서 라디오로 <strong>작업할 계정</strong>을 하나 고른 뒤, 아래 탭에서 방식을 고르고 키워드 또는 카드뉴스 이미지를 넣어 <strong>본문 생성</strong>을 누르세요.
+      생성된 글은 아래 목록에 쌓이며, 같은 계정으로 포스팅됩니다. 키워드 생성 시 참고 이미지는 <code>src/치과명/img</code>에서, 치과명은 선택한 계정에 저장된 이름을 씁니다.
+    </p>
+
+    <!-- 모드 탭 (기본: 카드뉴스 이미지) -->
+    <div class="mode-tabs">
+      <button class="mode-tab active" id="tab-cardnews" onclick="switchMode('cardnews')">🗂️ 카드뉴스 이미지</button>
+      <button class="mode-tab" id="tab-keyword" onclick="switchMode('keyword')">✏️ 키워드 입력</button>
+    </div>
+
+    <!-- 카드뉴스 이미지 패널 -->
+    <div class="mode-panel active" id="panel-cardnews">
+      <p class="cn-panel-lead">위 <strong>계정관리</strong>에서 선택한 계정으로 생성·포스팅됩니다. 각 슬롯에 카드뉴스 이미지만 올려 주세요.</p>
+      <div id="cn-slots-wrap"></div>
+      <div class="btn-row" style="margin-top:10px;">
+        <button class="btn btn-ghost" id="btn-add-slot" onclick="addSlot()" style="font-size:13px;">＋ 슬롯 추가 (최대 20개)</button>
+      </div>
+      <div class="btn-row" style="margin-top:14px;">
+        <button class="btn btn-primary" id="btn-generate-cn" onclick="generateFromCardnews()">✨ 카드뉴스로 본문 생성</button>
+        <button class="btn btn-ghost" onclick="clearAllSlots()">✕ 전체 초기화</button>
+      </div>
+    </div>
+
+    <!-- 키워드 입력 패널 -->
+    <div class="mode-panel" id="panel-keyword">
+        <label>작업 계정 <span style="font-weight:400;color:var(--muted);font-size:11px;">(위 <strong>계정관리</strong> 라디오로 선택 · 키워드 생성 시 이미지는 <code>src/치과명/img</code>)</span></label>
+        <div class="clinic-row active-account-row">
+          <div class="active-account-display" id="active-account-display">계정을 불러오는 중…</div>
+          <span class="clinic-badge" id="clinic-badge">미입력</span>
+        </div>
+
+      <details class="feed-collect" id="naver-kw-tool-details">
+        <summary>연관 키워드 찾기 (검색량·블로그 경쟁)</summary>
+        <p class="naver-kw-help-lead">
+          <strong>시드</strong>에 쓰고 싶은 말(예: 사랑니 발치)을 적고 <strong>연관·검색량 조회</strong>를 누르면, 비슷한 검색어와 한 달 검색 횟수가 표로 나옵니다.
+          마음에 드는 줄을 체크해 아래 <strong>키워드 입력 칸</strong>으로 보낼 수 있어요.
+          <strong>제외 단어</strong>에는 빼고 싶은 말을 적으면(쉼표로 여러 개) 그 글자가 들어간 연관어만 표에서 숨겨집니다. 다시 조회할 필요는 없습니다.
+        </p>
+        <label style="margin-top:10px">시드 키워드</label>
+        <textarea class="fcf" id="naver-kw-seed" rows="2" placeholder="예: 임플란트 비용"></textarea>
+        <label style="margin-top:10px">제외 단어 <span style="font-weight:400;color:var(--muted);font-size:11px;">(연관키워드에 <strong>포함</strong>되면 표에서 숨김 · 쉼표·줄바꿈으로 여러 개)</span></label>
+        <textarea class="fcf naver-kw-exclude-input" id="naver-kw-exclude" rows="2" placeholder="예: 치과, 병원, 강남 등" title="부분 일치입니다. '치과'만 넣으면 '강남치과'도 숨겨질 수 있어요." oninput="applyNaverKwSort()"></textarea>
+        <div class="naver-kw-tool-toolbar">
+          <div class="fc-status naver-kw-toolbar-status" id="naver-kw-status"></div>
+          <div class="naver-kw-toolbar-actions">
+            <div id="naver-kw-sort-bar" class="naver-kw-sort-bar">
+              <span class="naver-kw-sort-label">정렬</span>
+              <select id="naver-kw-sort-key" style="font-size:12px;padding:6px 8px;border-radius:6px;border:1.5px solid var(--border);font-family:inherit;background:#fff;max-width:100%;" onchange="onNaverKwSortKeyChange()">
+                <option value="ratio" selected>경쟁비율(글÷월간검색)</option>
+                <option value="comp">블로그 경쟁(꿀·보통·높음)</option>
+                <option value="sum">PC+모바일 합</option>
+                <option value="blog">블로그 글 수</option>
+                <option value="pc">PC 월간 검색량</option>
+                <option value="mobile">모바일 월간 검색량</option>
+                <option value="keyword">연관키워드(가나다)</option>
+              </select>
+              <select id="naver-kw-sort-dir" style="font-size:12px;padding:6px 8px;border-radius:6px;border:1.5px solid var(--border);font-family:inherit;background:#fff;" onchange="applyNaverKwSort()">
+                <option value="asc" selected>낮은 쪽 먼저</option>
+                <option value="desc">높은 쪽 먼저</option>
+              </select>
+              <label class="naver-kw-inline-label">
+                월간합 ≥
+                <input type="number" id="naver-kw-min-sum" min="0" max="999999" step="10" value="0" placeholder="0" title="월간 검색 합(PC+모바일) 최소값. 0이면 필터 없음"
+                  style="width:64px;padding:4px 6px;font-size:12px;border-radius:6px;border:1.5px solid var(--border);font-family:inherit;"
+                  oninput="applyNaverKwSort()" />
+              </label>
+              <label class="naver-kw-inline-label" title="블로그 글 수·경쟁비율을 채울 연관 키워드 개수(많을수록 느림)">
+                블로그 상한
+                <select id="naver-kw-blog-limit" style="font-size:12px;padding:6px 8px;border-radius:6px;border:1.5px solid var(--border);font-family:inherit;background:#fff;">
+                  <option value="80">80</option>
+                  <option value="120">120</option>
+                  <option value="150" selected>150</option>
+                  <option value="200">200</option>
+                  <option value="250">250</option>
+                  <option value="300">300</option>
+                </select>
+              </label>
+            </div>
+            <div class="naver-kw-toolbar-btns">
+              <button type="button" class="btn btn-ghost" style="font-size:13px" id="btn-naver-kw-fetch" onclick="fetchNaverKeywordTool()">연관·검색량 조회</button>
+              <button type="button" class="btn btn-primary" style="font-size:13px;padding:8px 14px" onclick="appendCheckedNaverKeywords()">선택 → 키워드 줄에 추가</button>
+            </div>
+          </div>
+        </div>
+        <div id="naver-kw-fetch-progress" class="naver-kw-fetch-progress" aria-hidden="true">
+          <div class="naver-kw-fetch-progress-fill"></div>
+        </div>
+        <div class="kw-tool-table-wrap" id="naver-kw-table-wrap" style="display:none"></div>
+      </details>
+
+      <div class="keyword-main-block">
+      <label>한 줄 = 블로그 글 1개 · 쉼표로 구분하면 여러 키워드를 하나의 글에 포함</label>
+      <textarea class="keywords" id="keywords" placeholder="임플란트 비용&#10;사랑니 발치 후 주의사항, 발치 후 음식, 붓기 관리&#10;치아 미백 효과, 미백 주의사항&#10;스케일링 주기"></textarea>
+      <div class="keyword-hint">💡 줄바꿈 = 글 구분 · 쉼표 = 한 글에 여러 키워드 · 최대 20개 글</div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-generate" onclick="generateAll()">✨ 본문 생성</button>
+        <button class="btn btn-ghost" onclick="resetAll()">↺ 초기화</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 생성 결과 목록 -->
+  <div id="results-section">
+    <div class="card">
+      <div class="card-title">생성된 본문 목록</div>
+      <div id="select-summary"></div>
+      <div class="result-list" id="result-list"></div>
+
+      <p class="posting-hint">검수 완료까지 모두 진행된 글만 선택한 뒤, <strong>선택 포스팅 시작</strong>을 눌러 주세요.</p>
+
+      <!-- 큐 진행 상태 -->
+      <div id="queue-status" style="margin-top:16px;">
+        <div class="progress-wrap">
+          <div class="progress-bar-bg"><div class="progress-bar-fill" id="progress-fill" style="width:0%"></div></div>
+          <div class="progress-label" id="progress-label"></div>
+        </div>
+        <div class="status-msg-box" id="status-msg-box">
+          <div class="spinner" id="status-spinner" style="display:none"></div>
+          <span id="status-msg-text"></span>
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-top:18px; flex-wrap:wrap; gap:10px; align-items:center;">
+        <button class="btn btn-teal" id="btn-post-queue" disabled onclick="startQueue()">🚀 선택 포스팅 시작</button>
+        <button type="button" class="btn btn-ghost" id="btn-retry-post-queue" style="display:none;border:1.5px solid var(--teal);color:var(--teal-dark);font-weight:700;" onclick="retryFailedPosting()">🔄 실패한 글만 재시도</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  let pollingTimer = null;
+  /** 직전 포스팅 요청 본문(재시도용, idx 포함) */
+  let lastQueueItemsSnapshot = null;
+  let cards = [];
+  let multiAccounts = [];
+  let clinicList = [];
+  const MAX_SLOTS = 20;
+  let cnSlots = [{ files: [] }]; // 카드뉴스 슬롯: 이미지만 (계정은 계정관리 라디오)
+  /** blog_accounts.json 의 active_account_id 와 동기 */
+  let activeAccountId = '';
+
+  function getActiveAccount() {
+    const id = String(activeAccountId || '').trim();
+    if (!id) return null;
+    return getAccountById(id);
+  }
+
+  function getActiveAccountId() {
+    const acc = getActiveAccount();
+    if (!acc || !String(acc.naver_id || '').trim()) return '';
+    return String(acc.id || '').trim();
+  }
+
+  /** 키워드·카드뉴스·이미지 경로에 쓰는 치과명(선택된 계정의 clinic_name 등) */
+  function getClinicName() {
+    const acc = getActiveAccount();
+    if (!acc) return '';
+    return String(acc.clinic_name || acc.label || acc.naver_id || '').trim();
+  }
+
+  /** 서버/목록과 맞지 않으면 첫 저장 계정으로 보정. true 이면 디스크에 다시 써야 함 */
+  function ensureActiveAccountValid() {
+    const saved = savedAccountsForSlotPick();
+    const ids = new Set(saved.map(a => String(a.id || '').trim()).filter(Boolean));
+    const cur = String(activeAccountId || '').trim();
+    if (cur && ids.has(cur)) return false;
+    activeAccountId = saved.length ? String(saved[0].id || '').trim() : '';
+    return true;
+  }
+
+  function updateActiveAccountFolderBadge() {
+    const val = getClinicName();
+    const badge = document.getElementById('clinic-badge');
+    if (!badge) return;
+    const hasSrc = clinicList.includes(val);
+    if (!val) {
+      badge.textContent = '미입력';
+      badge.className = 'clinic-badge';
+    } else if (hasSrc) {
+      badge.textContent = `✓ ${val}`;
+      badge.className = 'clinic-badge has-data';
+    } else {
+      badge.textContent = `${val} (src 폴더 없음)`;
+      badge.className = 'clinic-badge';
+    }
+  }
+
+  function updateActiveAccountDisplay() {
+    const el = document.getElementById('active-account-display');
+    if (!el) return;
+    const acc = getActiveAccount();
+    if (!multiAccounts.length) {
+      el.textContent = '계정관리에서 계정을 추가·저장해 주세요.';
+    } else if (!savedAccountsForSlotPick().length) {
+      el.textContent = '저장된 계정에 네이버 ID가 있어야 합니다.';
+    } else if (!acc || !String(acc.naver_id || '').trim()) {
+      el.textContent = '왼쪽 표에서 작업할 계정(○)을 선택해 주세요.';
+    } else {
+      const label = String(acc.clinic_name || acc.label || acc.naver_id || '').trim() || acc.id;
+      const path = getClinicName() ? `src/${getClinicName()}/img` : '';
+      el.innerHTML = '<strong>' + escHtml(label) + '</strong>' + (path ? ' <span style="color:var(--muted);font-weight:400;font-size:12px;">· ' + escHtml(path) + '</span>' : '');
+    }
+    updateActiveAccountFolderBadge();
+  }
+
+  /** 본문 생성 전 검증 실패 시 계정관리 카드로 스크롤·포커스 */
+  function focusAccountsSection() {
+    const card = document.querySelector('.accounts-unified-card');
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const rad = document.querySelector('.accounts-active-radio:checked')
+      || document.querySelector('.accounts-active-radio:not([disabled])');
+    if (rad && typeof rad.focus === 'function') {
+      try { rad.focus({ preventScroll: true }); } catch (_) { try { rad.focus(); } catch (_) {} }
+    }
+  }
+
+  async function loadAccountSettings() {
+    try {
+      const res = await fetch('/account_settings?_=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) return;
+      await res.json();
+      updateActiveAccountDisplay();
+    } catch (e) {
+      console.warn('loadAccountSettings', e);
+    }
+  }
+
+  function onActiveAccountRadioChange(newId) {
+    activeAccountId = String(newId || '').trim();
+    updateActiveAccountDisplay();
+    persistMultiAccounts({ silent: true });
+  }
+
+  function getAccountById(id) {
+    const sid = String(id || '').trim();
+    if (!sid) return null;
+    return (multiAccounts || []).find(a => String(a.id || '').trim() === sid) || null;
+  }
+
+  /** 키워드 탭의 치과명으로 blog_accounts에서 계정 id 찾기 (없으면 __env__) */
+  function resolveAccountIdByClinic(clinicName) {
+    const cn = String(clinicName || '').trim();
+    if (!cn) return '__env__';
+    const acc = (multiAccounts || []).find(a => {
+      const ac = String(a.clinic_name || '').trim();
+      const al = String(a.label || '').trim();
+      return (ac && ac === cn) || (al && al === cn);
+    });
+    if (acc && String(acc.id || '').trim() && String(acc.naver_id || '').trim()) {
+      return String(acc.id).trim();
+    }
+    return '__env__';
+  }
+
+  /** 카드뉴스 슬롯: 네이버 ID가 저장된 계정만 */
+  function savedAccountsForSlotPick() {
+    return (multiAccounts || []).filter(a => String(a.id || '').trim() && String(a.naver_id || '').trim());
+  }
+
+  async function loadMultiAccounts() {
+    try {
+      const res = await fetch('/accounts?_=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      multiAccounts = data.accounts || [];
+      activeAccountId = String(data.active_account_id || '').trim();
+      const needPersist = ensureActiveAccountValid();
+      if (needPersist && multiAccounts.length) {
+        await persistMultiAccounts({ silent: true });
+      } else {
+        renderMultiAccountsTable();
+        updateActiveAccountDisplay();
+      }
+    } catch (e) {
+      console.warn('loadMultiAccounts', e);
+    }
+  }
+
+  async function loadStartupHints() {
+    const el = document.getElementById('startup-hints-banner');
+    if (!el) return;
+    try {
+      const res = await fetch('/startup_hints?_=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) {
+        el.hidden = true;
+        el.classList.remove('visible');
+        el.textContent = '';
+        return;
+      }
+      const data = await res.json();
+      const hints = data.hints || [];
+      if (!hints.length) {
+        el.hidden = true;
+        el.classList.remove('visible');
+        el.textContent = '';
+        return;
+      }
+      const items = hints
+        .map((h) => String(h.message || '').trim())
+        .filter(Boolean)
+        .map((m) => '<li>' + escHtml(m) + '</li>')
+        .join('');
+      el.innerHTML =
+        '<p class="startup-hints-title"><strong>Chrome이 이미 이 프로필로 실행 중입니다</strong></p>' +
+        '<ul class="startup-hints-list">' + items + '</ul>' +
+        '<p class="startup-hints-foot">위에서 말한 Chrome 창을 <strong>모두 닫은 뒤</strong> 새로고침(F5)하면 이 안내가 사라집니다.</p>';
+      el.hidden = false;
+      el.classList.add('visible');
+    } catch (e) {
+      console.warn('loadStartupHints', e);
+    }
+  }
+
+  async function persistMultiAccounts({ silent } = { silent: false }) {
+    const status = document.getElementById('multi-accounts-save-status');
+    if (!silent && status) {
+      status.textContent = '저장 중...';
+      status.className = 'account-save-status';
+    }
+    try {
+      const res = await fetch('/accounts', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accounts: multiAccounts, active_account_id: activeAccountId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || res.statusText || '요청 실패');
+      multiAccounts = data.accounts || multiAccounts;
+      if (data.active_account_id !== undefined && data.active_account_id !== null) {
+        activeAccountId = String(data.active_account_id || '').trim();
+      }
+      renderMultiAccountsTable();
+      updateActiveAccountDisplay();
+      if (status) {
+        if (silent) {
+          status.textContent = '';
+          status.className = 'account-save-status';
+        } else {
+          status.textContent = '저장되었습니다.';
+          status.className = 'account-save-status ok';
+        }
+      }
+    } catch (e) {
+      if (status) {
+        status.textContent = '저장 실패: ' + (e.message || e);
+        status.className = 'account-save-status err';
+      }
+    }
+  }
+
+  function readAccountRowFromDom(idx) {
+    const tr = document.querySelector(`tr[data-acc-idx="${idx}"]`);
+    if (!tr) return null;
+    const g = (f) => (tr.querySelector(`input[data-field="${f}"]`) || {}).value;
+    return {
+      clinic_name: (g('clinic_name') || '').trim(),
+      naver_id: (g('naver_id') || '').trim(),
+      naver_pw: g('naver_pw') != null ? String(g('naver_pw')) : '',
+    };
+  }
+
+  async function saveAccountRow(idx) {
+    const row = readAccountRowFromDom(idx);
+    if (!row || !multiAccounts[idx]) return;
+    if (!row.naver_id) {
+      alert('네이버 ID를 입력해주세요.');
+      return;
+    }
+    multiAccounts[idx].clinic_name = row.clinic_name;
+    multiAccounts[idx].naver_id = row.naver_id;
+    multiAccounts[idx].naver_pw = row.naver_pw;
+    multiAccounts[idx].label = (row.clinic_name || row.naver_id).trim() || row.naver_id;
+    await persistMultiAccounts({ silent: false });
+    updateActiveAccountDisplay();
+  }
+
+  function renderMultiAccountsTable() {
+    const tb = document.getElementById('multi-accounts-tbody');
+    const hint = document.getElementById('accounts-empty-hint');
+    if (!tb) return;
+    tb.replaceChildren();
+    if (hint) hint.style.display = multiAccounts.length ? 'none' : 'block';
+    multiAccounts.forEach((a, i) => {
+      const tr = document.createElement('tr');
+      tr.dataset.accIdx = String(i);
+      const tdRad = document.createElement('td');
+      tdRad.className = 'accounts-td-active';
+      const rad = document.createElement('input');
+      rad.type = 'radio';
+      rad.name = 'active-account';
+      rad.className = 'accounts-active-radio';
+      const aid = String(a.id || '').trim();
+      rad.value = aid;
+      rad.checked = aid && String(activeAccountId || '').trim() === aid;
+      rad.title = '이 계정으로 본문 생성·포스팅·키워드 이미지 폴더';
+      rad.disabled = !String(a.naver_id || '').trim();
+      rad.addEventListener('change', () => {
+        if (rad.checked) onActiveAccountRadioChange(aid);
+      });
+      tdRad.appendChild(rad);
+      tr.appendChild(tdRad);
+      [
+        { key: 'clinic_name', ph: '예: 주영치과' },
+        { key: 'naver_id', ph: '네이버 ID' },
+        { key: 'naver_pw', ph: '비밀번호' },
+      ].forEach(({ key, ph }) => {
+        const td = document.createElement('td');
+        const inp = document.createElement('input');
+        inp.className = 'accounts-cell-input';
+        inp.type = 'text';
+        inp.spellcheck = false;
+        inp.autocomplete = 'off';
+        inp.dataset.field = key;
+        inp.placeholder = ph;
+        const v = a[key];
+        inp.value = v != null ? String(v) : '';
+        td.appendChild(inp);
+        tr.appendChild(td);
+      });
+      const tdAct = document.createElement('td');
+      tdAct.className = 'accounts-td-actions-cell';
+      const inner = document.createElement('div');
+      inner.className = 'accounts-td-actions-inner';
+      const btnSave = document.createElement('button');
+      btnSave.type = 'button';
+      btnSave.className = 'btn btn-account-save';
+      const idx = i;
+      btnSave.onclick = () => saveAccountRow(idx);
+      btnSave.textContent = '저장';
+      inner.appendChild(btnSave);
+      const btnDel = document.createElement('button');
+      btnDel.type = 'button';
+      btnDel.className = 'btn btn-account-remove';
+      btnDel.onclick = () => removeMultiAccountRow(idx);
+      btnDel.textContent = '삭제';
+      inner.appendChild(btnDel);
+      tdAct.appendChild(inner);
+      tr.appendChild(tdAct);
+      tb.appendChild(tr);
+    });
+  }
+
+  function addMultiAccountRow() {
+    if (multiAccounts.length >= 40) {
+      alert('추가 계정은 최대 40개까지입니다.');
+      return;
+    }
+    multiAccounts.push({
+      id: 'new_' + Date.now(),
+      label: '',
+      naver_id: '',
+      naver_pw: '',
+      clinic_name: '',
+    });
+    renderMultiAccountsTable();
+    updateActiveAccountDisplay();
+  }
+
+  async function removeMultiAccountRow(index) {
+    if (index < 0 || index >= multiAccounts.length) return;
+    if (!confirm('이 행을 목록에서 삭제할까요? 저장된 정보도 함께 제거됩니다.')) return;
+    const removed = multiAccounts[index];
+    const removedId = String(removed && removed.id || '').trim();
+    multiAccounts.splice(index, 1);
+    if (removedId && String(activeAccountId || '').trim() === removedId) {
+      activeAccountId = '';
+      ensureActiveAccountValid();
+    }
+    renderMultiAccountsTable();
+    await persistMultiAccounts({ silent: true });
+  }
+
+  // ── 모드 탭 전환 ──────────────────────────────────────────────
+
+  function switchMode(mode) {
+    ['cardnews', 'keyword'].forEach(m => {
+      document.getElementById(`tab-${m}`).classList.toggle('active', m === mode);
+      document.getElementById(`panel-${m}`).classList.toggle('active', m === mode);
+    });
+  }
+
+  /** 카드뉴스도 키워드와 동일하게 계정관리에서 선택한 계정만 사용 */
+  function getCnSlotAccountId() {
+    return getActiveAccountId();
+  }
+
+  function getCnSlotClinicName() {
+    return getClinicName();
+  }
+
+  // ── 카드뉴스 슬롯 관리 ───────────────────────────────────────
+  let dragSrcIdx = null;
+  let dragSrcSlot = null;
+
+  function renderSlots() {
+    const wrap = document.getElementById('cn-slots-wrap');
+
+    cnSlots = cnSlots.map(s => {
+      if (Array.isArray(s)) return { files: s };
+      const files = s.files || [];
+      return { files };
+    });
+
+    wrap.innerHTML = cnSlots.map((slot, si) => {
+      const files = slot.files || [];
+      return `
+      <div class="cn-slot" id="cn-slot-${si}">
+        <div class="cn-slot-header">
+          <span>세트 ${si + 1}</span>
+          ${cnSlots.length > 1 ? `<button class="cn-slot-del" onclick="removeSlot(${si})" title="슬롯 삭제">✕</button>` : ''}
+        </div>
+        <div class="upload-area" id="upload-area-${si}"
+             onclick="document.getElementById('cn-file-input-${si}').click()"
+             ondragover="event.preventDefault(); this.classList.add('drag-over')"
+             ondragleave="this.classList.remove('drag-over')"
+             ondrop="onSlotFileDrop(event,${si})"
+             style="padding:16px 12px;">
+          <div class="upload-icon" style="font-size:28px;">🖼️</div>
+          <strong style="font-size:13px;">클릭 또는 드래그</strong>
+          <p style="font-size:12px; margin:2px 0 0;">JPG · PNG 여러 장 가능</p>
+        </div>
+        <input type="file" id="cn-file-input-${si}" accept="image/*" multiple style="display:none"
+               onchange="onSlotFileSelect(event,${si})" />
+        <div class="cn-preview" id="cn-preview-${si}"></div>
+        <div class="cn-count" id="cn-count-${si}"></div>
+      </div>`;
+    }).join('');
+    document.getElementById('btn-add-slot').style.display = cnSlots.length >= MAX_SLOTS ? 'none' : '';
+
+    cnSlots.forEach((_, si) => renderSlotPreview(si));
+  }
+
+  function renderSlotPreview(si) {
+    const files = cnSlots[si].files || [];
+    const wrap = document.getElementById(`cn-preview-${si}`);
+    if (!wrap) return;
+    wrap.innerHTML = files.map((f, i) => {
+      const url = URL.createObjectURL(f);
+      return `<div class="cn-thumb-wrap" draggable="true"
+        ondragstart="cnDragStart(event,${si},${i})"
+        ondragover="cnDragOver(event,${si},${i})"
+        ondragleave="cnDragLeave(event)"
+        ondrop="cnDrop(event,${si},${i})"
+        ondragend="cnDragEnd(event)">
+        <img class="cn-thumb" src="${url}" title="${escHtml(f.name)}" />
+        <button class="cn-thumb-del" onclick="removeSlotFile(${si},${i})" title="삭제">✕</button>
+        <span class="cn-thumb-num">${i + 1}</span>
+      </div>`;
+    }).join('');
+    document.getElementById(`cn-count-${si}`).textContent =
+      files.length ? `${files.length}장 선택됨` : '';
+  }
+
+  function addSlot() {
+    if (cnSlots.length >= MAX_SLOTS) return;
+    cnSlots.push({ files: [] });
+    renderSlots();
+  }
+
+  function removeSlot(si) {
+    cnSlots.splice(si, 1);
+    renderSlots();
+  }
+
+  function clearAllSlots() { cnSlots = [{ files: [] }]; renderSlots(); }
+
+  function onSlotFileSelect(e, si) {
+    addSlotFiles(si, Array.from(e.target.files));
+    e.target.value = '';
+  }
+
+  function onSlotFileDrop(e, si) {
+    e.preventDefault();
+    document.getElementById(`upload-area-${si}`).classList.remove('drag-over');
+    addSlotFiles(si, Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/')));
+  }
+
+  function addSlotFiles(si, files) {
+    files.forEach(file => {
+      if (!cnSlots[si].files.find(f => f.name === file.name)) cnSlots[si].files.push(file);
+    });
+    renderSlotPreview(si);
+    document.getElementById(`cn-count-${si}`).textContent =
+      cnSlots[si].files.length ? `${cnSlots[si].files.length}장 선택됨` : '';
+  }
+
+  function removeSlotFile(si, i) { cnSlots[si].files.splice(i, 1); renderSlotPreview(si); }
+
+  function cnDragStart(e, si, i) {
+    dragSrcSlot = si; dragSrcIdx = i;
+    e.currentTarget.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  }
+  function cnDragOver(e, si, i) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (si !== dragSrcSlot || i !== dragSrcIdx) e.currentTarget.classList.add('drag-over-item');
+  }
+  function cnDragLeave(e) { e.currentTarget.classList.remove('drag-over-item'); }
+  function cnDrop(e, si, i) {
+    e.preventDefault();
+    e.currentTarget.classList.remove('drag-over-item');
+    if (dragSrcSlot !== si || dragSrcIdx === null || dragSrcIdx === i) return;
+    const moved = cnSlots[si].files.splice(dragSrcIdx, 1)[0];
+    cnSlots[si].files.splice(i, 0, moved);
+    renderSlotPreview(si);
+  }
+  function cnDragEnd(e) {
+    e.currentTarget.classList.remove('dragging');
+    document.querySelectorAll('.cn-thumb-wrap').forEach(el => el.classList.remove('drag-over-item'));
+    dragSrcIdx = null; dragSrcSlot = null;
+  }
+
+  async function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // ── 카드뉴스 본문 생성 ────────────────────────────────────────
+
+  async function generateFromCardnews() {
+    const activeSlots = cnSlots.map((slot, si) => ({ files: slot.files || [], si })).filter(s => s.files.length > 0);
+    if (!activeSlots.length) { alert('카드뉴스 이미지를 업로드해주세요.'); return; }
+
+    if (!savedAccountsForSlotPick().length) {
+      alert('먼저 계정관리에서 계정을 등록·저장해 주세요.');
+      focusAccountsSection();
+      return;
+    }
+
+    const aid = getCnSlotAccountId();
+    const clinicName = getCnSlotClinicName();
+    if (!aid) {
+      alert('계정관리에서 작업할 계정(○)을 선택하고, 네이버 ID로 저장해 주세요.');
+      focusAccountsSection();
+      return;
+    }
+    if (!(clinicName || '').trim()) {
+      alert('선택한 계정에 치과명(또는 표시 이름)이 없습니다. 계정 표에서 치과명을 입력·저장해 주세요.');
+      focusAccountsSection();
+      return;
+    }
+
+    const tasks = [];
+
+    // 기존 카드뉴스 결과 카드만 제거 (키워드 생성 카드는 유지)
+    cards = cards.filter(c => !c.cardnewsSession && !c._isCardnews);
+    lastQueueItemsSnapshot = null;
+
+    for (const { files, si } of activeSlots) {
+      const clinicName = getCnSlotClinicName();
+      const aid = getCnSlotAccountId();
+      const acc = getAccountById(aid);
+      const postingLabel = acc
+        ? String((acc.clinic_name || acc.label || '').trim() || clinicName)
+        : clinicName;
+      const idx = cards.length;
+      cards.push({
+        keywords: [clinicName], keyword: clinicName,
+        title: '', body: '', images: [], clinicName,
+        profileName: clinicName,
+        state: 'loading', checked: true,
+        accountId: aid,
+        postingLabel,
+        reviewComplete: false,
+        _isCardnews: true,
+      });
+      tasks.push({ files, si, clinicName, idx });
+    }
+
+    const btn = document.getElementById('btn-generate-cn');
+    btn.disabled = true;
+    btn.textContent = '생성 중...';
+
+    renderCards();
+    document.getElementById('results-section').style.display = 'block';
+    document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+    tasks.forEach(t => updateCardState(t.idx, 'loading', `${t.clinicName} 이미지 분석 중...`));
+
+    // 병렬 생성
+    await Promise.all(tasks.map(async ({ files, clinicName, idx }) => {
+      try {
+        const imagesPayload = await Promise.all(files.map(async f => ({
+          filename: f.name,
+          b64data: await fileToBase64(f),
+          mime_type: f.type || 'image/jpeg',
+        })));
+
+        const res = await fetch('/generate_cardnews', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ images: imagesPayload, clinic_name: clinicName }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        cards[idx].title = data.title;
+        cards[idx].body = data.body;
+        cards[idx].keywords = [clinicName];
+        cards[idx].images = data.images || [];
+        cards[idx].clinicName = data.clinic_name || clinicName;
+        cards[idx].cardnewsSession = data.cardnews_session || '';
+        cards[idx].profileName = clinicName;
+        cards[idx].checked = true;
+        updateCardState(idx, 'ready');
+        renderCardContent(idx);
+      } catch (e) {
+        cards[idx].state = 'error';
+        cards[idx].checked = false;
+        updateCardState(idx, 'error', e.message);
+      }
+    }));
+
+    btn.disabled = false;
+    btn.textContent = '✨ 카드뉴스로 본문 생성';
+    updateSummary();
+    updateRetryPostButtonVisibility();
+  }
+
+  // ── 치과명 배지 (src 폴더 여부) ───────────────────────────────
+
+  async function loadClinics() {
+    try {
+      const res = await fetch('/clinics');
+      const data = await res.json();
+      clinicList = data.clinics || [];
+    } catch {}
+  }
+
+  // ── 본문 생성 ──────────────────────────────────────────────────
+
+  async function generateAll() {
+    const raw = document.getElementById('keywords').value.trim();
+    if (!raw) { alert('키워드를 입력해주세요.'); return; }
+
+    if (!savedAccountsForSlotPick().length) {
+      alert('먼저 계정관리에서 계정을 등록·저장해 주세요.');
+      focusAccountsSection();
+      return;
+    }
+    if (!getActiveAccountId() || !getClinicName()) {
+      alert('계정관리에서 작업할 계정(○)을 선택하고, 치과명·네이버 ID를 저장해 주세요.');
+      focusAccountsSection();
+      return;
+    }
+
+    // 줄 = 글 구분 / 쉼표 = 같은 글 안에 여러 키워드
+    const keywordGroups = raw.split('\n')
+      .map(line => line.split(',').map(k => k.trim()).filter(Boolean))
+      .filter(g => g.length > 0)
+      .slice(0, 20);
+    if (!keywordGroups.length) { alert('유효한 키워드가 없습니다.'); return; }
+
+    const clinicName = getClinicName();
+
+    const btn = document.getElementById('btn-generate');
+    btn.disabled = true;
+    btn.textContent = '생성 중...';
+
+    cards = cards.filter(c => !c._isKeyword);   // 기존 키워드 카드만 초기화
+    lastQueueItemsSnapshot = null;
+    const startIdx = cards.length;
+    keywordGroups.forEach(kws => {
+      const aid = getActiveAccountId() || resolveAccountIdByClinic(clinicName);
+      const acc = aid !== '__env__' ? getAccountById(aid) : null;
+      const postingLabel = acc
+        ? String((acc.clinic_name || acc.label || '').trim() || clinicName)
+        : clinicName;
+      cards.push({
+        keywords: kws, keyword: kws[0],
+        title: '', body: '', images: [], clinicName,
+        profileName: clinicName,
+        state: 'loading', checked: true,
+        accountId: aid,
+        postingLabel,
+        reviewComplete: false,
+        _isKeyword: true,
+      });
+    });
+    renderCards();
+    document.getElementById('results-section').style.display = 'block';
+    document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+
+    // 병렬 생성
+    await Promise.all(keywordGroups.map(async (kws, offset) => {
+      const i = startIdx + offset;
+      updateCardState(i, 'loading', '생성 중...');
+      try {
+        const res = await fetch('/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keywords: kws, clinic_name: clinicName })
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        cards[i].title = data.title;
+        cards[i].body = data.body;
+        cards[i].images = data.images || [];
+        cards[i].clinicName = data.clinic_name || clinicName;
+        cards[i].profileName = clinicName;
+        cards[i].checked = true;
+        updateCardState(i, 'ready');
+        renderCardContent(i);
+      } catch (e) {
+        cards[i].state = 'error';
+        cards[i].checked = false;
+        updateCardState(i, 'error', e.message);
+      }
+    }));
+
+    btn.disabled = false;
+    btn.textContent = '✨ 본문 생성';
+    updateSummary();
+    updateRetryPostButtonVisibility();
+  }
+
+  // ── 카드 단계 막대 (생성 / 검수) ───────────────────────────────
+
+  function syncCardPhaseBars(i) {
+    const gt = document.getElementById(`gen-track-${i}`);
+    const rt = document.getElementById(`rev-track-${i}`);
+    if (!gt || !rt) return;
+    const c = cards[i];
+    if (!c) return;
+    const st = c.state;
+    const base = 'card-phase-track';
+    gt.className = base;
+    rt.className = base;
+    if (st === 'loading') {
+      gt.classList.add('is-indeterminate');
+      rt.classList.add('is-waiting');
+    } else if (st === 'ready') {
+      gt.classList.add('is-done', 'is-done-gen');
+      if (c.reviewComplete) {
+        rt.classList.add('is-done', 'is-done-rev');
+      } else {
+        rt.classList.add('is-indeterminate');
+      }
+    } else if (st === 'error') {
+      gt.classList.add('is-error');
+      rt.classList.add('is-idle');
+    } else if (st === 'running' || st === 'done') {
+      gt.classList.add('is-hidden');
+      rt.classList.add('is-hidden');
+    } else {
+      gt.classList.add('is-idle');
+      rt.classList.add('is-idle');
+    }
+  }
+
+  // ── 카드 렌더링 ────────────────────────────────────────────────
+
+  function renderCards() {
+    const list = document.getElementById('result-list');
+    list.innerHTML = '';
+    cards.forEach((c, i) => {
+      const div = document.createElement('div');
+      div.className = 'result-card';
+      div.id = `card-${i}`;
+      const kwTags = (c.keywords || [c.keyword])
+        .map(k => `<span class="kw-tag">${escHtml(k)}</span>`).join('');
+      const kwBlock = c._isCardnews
+        ? ''
+        : `<div class="kw-tags" id="kwtags-${i}">${kwTags}</div>`;
+      const st = c.state || 'pending';
+      const genMap = { loading: ['badge-running', '생성 중'], ready: ['badge-pending', '생성됨'], running: ['badge-running', '포스팅 중'], done: ['badge-done', '완료'], error: ['badge-error', '오류'] };
+      const [gCls, gLab] = genMap[st] || ['badge-pending', '대기'];
+      const revDone = !!c.reviewComplete;
+      const rCls = revDone ? 'review-badge review-ok' : 'review-badge review-checking';
+      const rLab = revDone ? '✓ 검수 완료' : '검수 대기';
+      div.innerHTML = `
+        <div class="result-card-header" onclick="toggleBody(${i})">
+          <div class="result-card-header-top">
+            <input type="checkbox" id="chk-${i}" checked onclick="event.stopPropagation(); toggleCheck(${i})" />
+            <input class="result-card-title-input" id="title-${i}" value="${escHtml(c.title || c.keyword)}" placeholder="제목" onclick="event.stopPropagation()" />
+            <div class="result-card-header-status" onclick="event.stopPropagation()">
+              <div class="card-phase-col card-phase-col--gen">
+                <span class="card-badge ${gCls}" id="badge-${i}">${escHtml(gLab)}</span>
+                <div class="card-phase-track is-idle" id="gen-track-${i}" aria-hidden="true"><div class="card-phase-fill"></div></div>
+              </div>
+              <div class="card-phase-col card-phase-col--rev">
+                <span class="${rCls}" id="review-badge-${i}" onclick="event.stopPropagation(); toggleReviewIssues(${i})">${escHtml(rLab)}</span>
+                <div class="card-phase-track is-idle" id="rev-track-${i}" aria-hidden="true"><div class="card-phase-fill"></div></div>
+              </div>
+            </div>
+            <span class="toggle-btn" id="toggle-${i}">▾</span>
+          </div>
+          <div class="result-card-header-sub" onclick="event.stopPropagation()">
+            ${kwBlock}
+            ${(c.postingLabel || c.clinicName) ? `<span class="posting-clinic-badge">${escHtml(c.postingLabel || c.clinicName)}</span>` : ''}
+          </div>
+        </div>
+        <div class="result-card-body" id="body-wrap-${i}">
+          <textarea id="body-${i}" placeholder="본문 생성 중..."></textarea>
+          <div id="img-strip-${i}"></div>
+          <div class="preview-wrap" id="preview-wrap-${i}" style="display:none">
+            <button class="preview-toggle" onclick="togglePreview(${i})">▸ 이미지 포함 미리보기</button>
+            <div class="preview-body" id="preview-body-${i}"></div>
+          </div>
+          <div id="review-issues-${i}" style="display:none"></div>
+          <div class="card-status-msg" id="card-msg-${i}"></div>
+        </div>`;
+      list.appendChild(div);
+      syncCardPhaseBars(i);
+    });
+    updatePostQueueButtonState();
+  }
+
+  function renderCardContent(i) {
+    const c = cards[i];
+    document.getElementById(`title-${i}`).value = c.title || c.keyword;
+    const bodyEl = document.getElementById(`body-${i}`);
+    bodyEl.value = c.body || '';
+
+    // 이미지 썸네일 스트립
+    const strip = document.getElementById(`img-strip-${i}`);
+    if (c.images && c.images.length) {
+      strip.innerHTML = '<div class="img-strip">' +
+        c.images.map(img => {
+          const url = c.cardnewsSession
+            ? `/tmp_image/${encodeURIComponent(c.cardnewsSession)}/${encodeURIComponent(img)}`
+            : `/src_image/${encodeURIComponent(c.clinicName)}/${encodeURIComponent(img)}`;
+          return `<img class="img-thumb" src="${url}" title="${escHtml(img)}" onerror="this.style.display='none'" />`;
+        }).join('') +
+        '</div>';
+      document.getElementById(`preview-wrap-${i}`).style.display = 'block';
+    } else {
+      strip.innerHTML = '';
+      document.getElementById(`preview-wrap-${i}`).style.display = 'none';
+    }
+
+    // 미리보기 내용 업데이트
+    updatePreview(i);
+
+    // 본문 편집 시 미리보기 갱신
+    bodyEl.addEventListener('input', () => updatePreview(i));
+
+    const rb = document.getElementById(`review-badge-${i}`);
+    if (rb) {
+      rb.className = 'review-badge review-checking';
+      rb.textContent = '검수 중';
+    }
+    syncCardPhaseBars(i);
+    setTimeout(() => {
+      if (!cards[i] || cards[i].state !== 'ready') return;
+      runReview(i);
+    }, 220);
+  }
+
+  // ── 자동 검수 ─────────────────────────────────────────────────
+
+  function runReview(i) {
+    const badge = document.getElementById(`review-badge-${i}`);
+    if (!badge) return;
+    if (cards[i]) cards[i].reviewComplete = true;
+    badge.className = 'review-badge review-ok';
+    badge.textContent = '✓ 검수 완료';
+    syncCardPhaseBars(i);
+    updatePostQueueButtonState();
+  }
+
+  function toggleReviewIssues(i) {
+    const box = document.getElementById(`review-issues-${i}`);
+    if (!box || !box.innerHTML) return;
+    box.style.display = box.style.display === 'none' ? 'block' : 'none';
+  }
+
+  // ── 이미지 미리보기 ───────────────────────────────────────────
+
+  function updatePreview(i) {
+    const c = cards[i];
+    if (!c.clinicName && !c.cardnewsSession) return;
+    const body = document.getElementById(`body-${i}`).value;
+    const previewEl = document.getElementById(`preview-body-${i}`);
+    if (!previewEl) return;
+
+    // [이미지: filename] → <img> 태그로 변환 (본문을 먼저 분할 처리)
+    const parts = body.split(/\[이미지:\s*([^\]]+)\]/g);
+    let html = '';
+    for (let pi = 0; pi < parts.length; pi++) {
+      if (pi % 2 === 0) {
+        // 일반 텍스트 구간
+        html += escHtml(parts[pi]);
+      } else {
+        // 이미지 파일명 구간
+        const f = parts[pi].trim();
+        if (/\.(jpg|jpeg|png|gif|webp)$/i.test(f)) {
+          const url = c.cardnewsSession
+            ? `/tmp_image/${encodeURIComponent(c.cardnewsSession)}/${encodeURIComponent(f)}`
+            : `/src_image/${encodeURIComponent(c.clinicName)}/${encodeURIComponent(f)}`;
+          html += `<img class="inline-img" src="${url}" alt="${escHtml(f)}" onerror="this.style.display='none'" />`;
+        } else {
+          html += `<span class="img-placeholder">[이미지: ${escHtml(f)}]</span>`;
+        }
+      }
+    }
+    previewEl.innerHTML = html;
+  }
+
+  function togglePreview(i) {
+    const el = document.getElementById(`preview-body-${i}`);
+    const btn = el.previousElementSibling;
+    el.classList.toggle('open');
+    btn.textContent = el.classList.contains('open') ? '▾ 이미지 포함 미리보기 닫기' : '▸ 이미지 포함 미리보기';
+    if (el.classList.contains('open')) updatePreview(i);
+  }
+
+  function updateCardState(i, state, msg = '') {
+    cards[i].state = state;
+    const card = document.getElementById(`card-${i}`);
+    const badge = document.getElementById(`badge-${i}`);
+    const msgEl = document.getElementById(`card-msg-${i}`);
+    if (!card) return;
+
+    card.className = 'result-card' + (cards[i].checked ? ' checked' : '');
+    const badgeMap = { loading: ['badge-running','생성 중'], ready: ['badge-pending','생성됨'], running: ['badge-running','포스팅 중'], done: ['badge-done','완료'], error: ['badge-error','오류'] };
+    const [cls, label] = badgeMap[state] || ['badge-pending','대기'];
+    if (badge) {
+      badge.className = `card-badge ${cls}`;
+      badge.textContent = label;
+    }
+    if (msgEl) msgEl.textContent = msg;
+    if (state === 'done') card.classList.add('state-done');
+    if (state === 'error') card.classList.add('state-error');
+    syncCardPhaseBars(i);
+    updatePostQueueButtonState();
+  }
+
+  function toggleBody(i) {
+    const wrap = document.getElementById(`body-wrap-${i}`);
+    const btn = document.getElementById(`toggle-${i}`);
+    wrap.classList.toggle('open');
+    btn.textContent = wrap.classList.contains('open') ? '▴' : '▾';
+  }
+
+  function toggleCheck(i) {
+    cards[i].checked = document.getElementById(`chk-${i}`).checked;
+    const card = document.getElementById(`card-${i}`);
+    if (cards[i].checked) card.classList.add('checked');
+    else card.classList.remove('checked');
+    updateSummary();
+  }
+
+  function updatePostQueueButtonState() {
+    const btn = document.getElementById('btn-post-queue');
+    if (!btn) return;
+    if (String(btn.textContent || '').includes('초기화')) {
+      btn.disabled = false;
+      updateRetryPostButtonVisibility();
+      return;
+    }
+    if (pollingTimer) {
+      btn.disabled = true;
+      updateRetryPostButtonVisibility();
+      return;
+    }
+    const hasReviewedReady = cards.some(c => c.state === 'ready' && c.reviewComplete);
+    btn.disabled = !hasReviewedReady;
+    updateRetryPostButtonVisibility();
+  }
+
+  /** 첫 포스팅 이후 실패·미완료가 있으면 재시도 버튼 표시(폴링 중에는 숨김) */
+  function updateRetryPostButtonVisibility() {
+    const retryBtn = document.getElementById('btn-retry-post-queue');
+    if (!retryBtn) return;
+    if (pollingTimer) {
+      retryBtn.style.display = 'none';
+      retryBtn.disabled = true;
+      return;
+    }
+    if (!lastQueueItemsSnapshot || !lastQueueItemsSnapshot.length) {
+      retryBtn.style.display = 'none';
+      retryBtn.disabled = false;
+      return;
+    }
+    const hasRetryable = lastQueueItemsSnapshot.some(entry => {
+      const i = entry.idx;
+      return typeof i === 'number' && cards[i] && cards[i].state !== 'done';
+    });
+    if (hasRetryable) {
+      retryBtn.style.display = '';
+      retryBtn.disabled = false;
+    } else {
+      retryBtn.style.display = 'none';
+      retryBtn.disabled = false;
+    }
+  }
+
+  function updateSummary() {
+    const ready = cards.filter(c => c.checked && c.state === 'ready').length;
+    const total = cards.filter(c => c.state === 'ready').length;
+    document.getElementById('select-summary').textContent = total > 0
+      ? `✅ ${total}개 생성됨 · ${ready}개 선택됨`
+      : '';
+    updatePostQueueButtonState();
+  }
+
+  function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  let naverKwRows = [];
+  /** 조회 직후 서버가 준 전체 행(월간합·제외어 필터 전) */
+  let naverKwRowsAll = [];
+  /** 표의 「검색키워드」 열 — 조회 직후 시드 첫 토큰(공백 제거) */
+  let naverKwSearchCol = '';
+
+  function _naverSeedForSearchColumn(seedRaw) {
+    const parts = String(seedRaw || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    if (!parts.length) return '';
+    return parts[0].replace(/\s+/g, '');
+  }
+
+  function _naverQcToSortNum(v) {
+    if (v === null || v === undefined) return 0;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    const s = String(v).trim();
+    const lt = s.match(/^<\s*(\d+(?:[.,]\d+)?)/);
+    if (lt) {
+      const cap = parseFloat(String(lt[1]).replace(',', '.'));
+      return Number.isFinite(cap) ? cap - 0.5 : 0;
+    }
+    const n = parseInt(String(s).replace(/,/g, ''), 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function _naverRowMonthlySum(r) {
+    if (r.monthlySearchSum != null && r.monthlySearchSum !== '') {
+      const n = Number(r.monthlySearchSum);
+      if (Number.isFinite(n)) return n;
+    }
+    return _naverQcToSortNum(r.monthlyPcQcCnt) + _naverQcToSortNum(r.monthlyMobileQcCnt);
+  }
+
+  function getNaverKwMinSumFilter() {
+    const el = document.getElementById('naver-kw-min-sum');
+    if (!el) return 0;
+    const n = parseInt(String(el.value || '').trim(), 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  function getNaverKwExcludeTokens() {
+    const el = document.getElementById('naver-kw-exclude');
+    if (!el) return [];
+    return String(el.value || '')
+      .split(/[\n,]+/)
+      .map(s => s.trim())
+      .filter(Boolean);
+  }
+
+  function _naverKwRowExcludedByTokens(relKeyword, tokens) {
+    if (!tokens || !tokens.length) return false;
+    const s = String(relKeyword || '');
+    for (let i = 0; i < tokens.length; i++) {
+      if (s.includes(tokens[i])) return true;
+    }
+    return false;
+  }
+
+  function refreshNaverKwToolStatusLine() {
+    const el = document.getElementById('naver-kw-status');
+    if (!el || !naverKwRowsAll.length) return;
+    const totalAll = naverKwRowsAll.length;
+    const shown = naverKwRows.length;
+    const minSum = getNaverKwMinSumFilter();
+    const tokens = getNaverKwExcludeTokens();
+    const afterMin = minSum > 0
+      ? naverKwRowsAll.filter(r => _naverRowMonthlySum(r) >= minSum)
+      : naverKwRowsAll.slice();
+    const hiddenByExclude = tokens.length ? Math.max(0, afterMin.length - shown) : 0;
+    let base = `${shown}건`;
+    const hints = [];
+    if (minSum > 0 && afterMin.length < totalAll) {
+      hints.push(`월간합 ${minSum}+ 적용 ${afterMin.length}/${totalAll}건`);
+    }
+    if (tokens.length && hiddenByExclude > 0) {
+      hints.push(`제외어 ${hiddenByExclude}건 숨김`);
+    }
+    if (hints.length) base += ' (' + hints.join(' · ') + ')';
+    el.textContent = base;
+  }
+
+  function onNaverKwSortKeyChange() {
+    const key = document.getElementById('naver-kw-sort-key').value;
+    if (key === 'ratio') {
+      document.getElementById('naver-kw-sort-dir').value = 'asc';
+    }
+    applyNaverKwSort();
+  }
+
+  function _naverBlogMarketOrder(r) {
+    const n = Number(r.blogMarketOrder);
+    return Number.isFinite(n) ? n : 99;
+  }
+
+  function _htmlBlogMarketComp(r) {
+    const label = r.blogMarketComp;
+    const tier = r.blogMarketTier;
+    if (!label) return '—';
+    let cls = 'kw-tier-none';
+    if (tier === 'honey') cls = 'kw-tier-honey';
+    else if (tier === 'mid') cls = 'kw-tier-mid';
+    else if (tier === 'high') cls = 'kw-tier-high';
+    return `<span class="kw-tier ${cls}" title="블로그 글 수 ÷ 월간 검색 합 기준"><span class="kw-tier-dot" aria-hidden="true"></span>${escHtml(String(label))}</span>`;
+  }
+
+  function _naverKwCheckedSetFromDom() {
+    const set = new Set();
+    document.querySelectorAll('.naver-kw-row-chk').forEach(ch => {
+      if (!ch.checked) return;
+      const i = +ch.getAttribute('data-i');
+      const r = naverKwRows[i];
+      if (r && r.relKeyword) set.add(String(r.relKeyword));
+    });
+    return set;
+  }
+
+  function applyNaverKwSort() {
+    const bar = document.getElementById('naver-kw-sort-bar');
+    const source = naverKwRowsAll.length ? naverKwRowsAll : naverKwRows;
+    if (!source.length) {
+      bar.classList.remove('is-visible');
+      naverKwRows = [];
+      renderNaverKwTable([]);
+      return;
+    }
+    bar.classList.add('is-visible');
+    const key = document.getElementById('naver-kw-sort-key').value;
+    const dir = document.getElementById('naver-kw-sort-dir').value === 'desc' ? -1 : 1;
+    const checkedKw = _naverKwCheckedSetFromDom();
+    const hadAnyChk = document.querySelectorAll('.naver-kw-row-chk').length > 0;
+    const preserve = hadAnyChk && checkedKw.size > 0;
+    const minSum = getNaverKwMinSumFilter();
+    const excludeTokens = getNaverKwExcludeTokens();
+    let filtered = minSum > 0 ? source.filter(r => _naverRowMonthlySum(r) >= minSum) : source.slice();
+    filtered = filtered.filter(r => !_naverKwRowExcludedByTokens(r.relKeyword, excludeTokens));
+    const rows = filtered;
+    rows.sort((a, b) => {
+      if (key === 'keyword') {
+        const c = String(a.relKeyword || '').localeCompare(String(b.relKeyword || ''), 'ko');
+        return dir * c;
+      }
+      let va, vb;
+      if (key === 'comp') {
+        va = _naverBlogMarketOrder(a);
+        vb = _naverBlogMarketOrder(b);
+      } else if (key === 'sum') {
+        va = _naverQcToSortNum(a.monthlyPcQcCnt) + _naverQcToSortNum(a.monthlyMobileQcCnt);
+        vb = _naverQcToSortNum(b.monthlyPcQcCnt) + _naverQcToSortNum(b.monthlyMobileQcCnt);
+      } else if (key === 'blog') {
+        const ha = a.blogTotal != null && a.blogTotal !== '' && Number.isFinite(Number(a.blogTotal));
+        const hb = b.blogTotal != null && b.blogTotal !== '' && Number.isFinite(Number(b.blogTotal));
+        if (!ha && !hb) return 0;
+        if (!ha) return 1;
+        if (!hb) return -1;
+        va = Number(a.blogTotal);
+        vb = Number(b.blogTotal);
+      } else if (key === 'ratio') {
+        const ha = a.competitionRatio != null && a.competitionRatio !== '' && Number.isFinite(Number(a.competitionRatio));
+        const hb = b.competitionRatio != null && b.competitionRatio !== '' && Number.isFinite(Number(b.competitionRatio));
+        if (!ha && !hb) return 0;
+        if (!ha) return 1;
+        if (!hb) return -1;
+        va = Number(a.competitionRatio);
+        vb = Number(b.competitionRatio);
+      } else if (key === 'mobile') {
+        va = _naverQcToSortNum(a.monthlyMobileQcCnt);
+        vb = _naverQcToSortNum(b.monthlyMobileQcCnt);
+      } else {
+        va = _naverQcToSortNum(a.monthlyPcQcCnt);
+        vb = _naverQcToSortNum(b.monthlyPcQcCnt);
+      }
+      if (va !== vb) return va < vb ? -1 * dir : 1 * dir;
+      return String(a.relKeyword || '').localeCompare(String(b.relKeyword || ''), 'ko');
+    });
+    naverKwRows = rows;
+    renderNaverKwTable(naverKwRows, preserve ? checkedKw : null);
+    refreshNaverKwToolStatusLine();
+  }
+
+  function _fmtRatio(v) {
+    if (v === null || v === undefined || v === '') return '—';
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    return n.toFixed(2);
+  }
+
+  function _fmtBlogTotal(v) {
+    if (v === null || v === undefined || v === '') return '—';
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    return String(Math.round(n));
+  }
+
+  function _fmtQc(v) {
+    if (v === null || v === undefined) return '—';
+    return String(v);
+  }
+
+  function renderNaverKwTable(rows, checkedSet) {
+    const wrap = document.getElementById('naver-kw-table-wrap');
+    if (!rows || !rows.length) {
+      wrap.style.display = 'none';
+      wrap.innerHTML = '';
+      return;
+    }
+    wrap.style.display = 'block';
+    const useSet = checkedSet instanceof Set;
+    wrap.innerHTML = `<table class="kw-tool-table"><thead><tr>
+      <th style="width:36px"><input type="checkbox" id="naver-kw-chk-all" title="전체 선택/해제" onclick="toggleAllNaverKwChk(this.checked)" /></th>
+      <th style="min-width:88px">검색키워드</th>
+      <th>연관키워드</th>
+      <th class="num">PC 월간</th><th class="num">모바일 월간</th>
+      <th class="num">월간합</th>
+      <th class="num" title="네이버 블로그 검색으로 잡은 글 개수(개발자 앱 키가 있을 때만 표시)">블로그 글 수</th>
+      <th class="num" title="블로그 글 수 ÷ 월간 검색 합. 낮을수록 상대적으로 덜 치열한 편">경쟁비율</th>
+      <th title="경쟁비율을 네 구간으로 나눈 표시(말풍선에 계산 기준)">블로그 경쟁</th>
+    </tr></thead><tbody>` + rows.map((r, i) => {
+      const sk = escHtml(naverKwSearchCol || '—');
+      const kw = escHtml(r.relKeyword || '');
+      const pc = escHtml(_fmtQc(r.monthlyPcQcCnt));
+      const mo = escHtml(_fmtQc(r.monthlyMobileQcCnt));
+      const sm = escHtml(_fmtBlogTotal(r.monthlySearchSum));
+      const bt = escHtml(_fmtBlogTotal(r.blogTotal));
+      const rat = escHtml(_fmtRatio(r.competitionRatio));
+      const comp = _htmlBlogMarketComp(r);
+      const rk = String(r.relKeyword || '');
+      const chk = useSet && checkedSet.has(rk) ? ' checked' : '';
+      return `<tr><td><input type="checkbox" class="naver-kw-row-chk" data-i="${i}"${chk} onchange="syncNaverKwMasterCheckbox()"></td><td>${sk}</td><td>${kw}</td><td class="num">${pc}</td><td class="num">${mo}</td><td class="num">${sm}</td><td class="num">${bt}</td><td class="num">${rat}</td><td>${comp}</td></tr>`;
+    }).join('') + '</tbody></table>';
+    syncNaverKwMasterCheckbox();
+  }
+
+  function syncNaverKwMasterCheckbox() {
+    const allChk = document.getElementById('naver-kw-chk-all');
+    if (!allChk) return;
+    const rowChks = [...document.querySelectorAll('.naver-kw-row-chk')];
+    const n = rowChks.filter(c => c.checked).length;
+    allChk.checked = rowChks.length > 0 && n === rowChks.length;
+    allChk.indeterminate = n > 0 && n < rowChks.length;
+  }
+
+  function toggleAllNaverKwChk(checked) {
+    document.querySelectorAll('.naver-kw-row-chk').forEach(ch => { ch.checked = checked; });
+    const allChk = document.getElementById('naver-kw-chk-all');
+    if (allChk) allChk.indeterminate = false;
+  }
+
+  async function fetchNaverKeywordTool() {
+    const prog = document.getElementById('naver-kw-fetch-progress');
+    const showKwProgress = () => {
+      if (!prog) return;
+      prog.classList.add('is-visible');
+      prog.setAttribute('aria-busy', 'true');
+      prog.setAttribute('aria-hidden', 'false');
+    };
+    const hideKwProgress = () => {
+      if (!prog) return;
+      prog.classList.remove('is-visible');
+      prog.setAttribute('aria-busy', 'false');
+      prog.setAttribute('aria-hidden', 'true');
+    };
+
+    const status = document.getElementById('naver-kw-status');
+    const seed = document.getElementById('naver-kw-seed').value.trim();
+    if (!seed) { alert('시드 키워드를 입력하세요.'); return; }
+    const btn = document.getElementById('btn-naver-kw-fetch');
+    btn.disabled = true;
+    showKwProgress();
+    status.textContent = '조회 중...';
+    naverKwRows = [];
+    naverKwRowsAll = [];
+    naverKwSearchCol = '';
+    document.getElementById('naver-kw-sort-bar').classList.remove('is-visible');
+    renderNaverKwTable([]);
+    try {
+      const limEl = document.getElementById('naver-kw-blog-limit');
+      let blogLimit = limEl ? parseInt(String(limEl.value || '150'), 10) : 150;
+      if (!Number.isFinite(blogLimit)) blogLimit = 150;
+      blogLimit = Math.max(1, Math.min(blogLimit, 300));
+      const res = await fetch('/naver_keyword_tool', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hint_keywords: seed, show_detail: 1, delay_ms: 400, blog_limit: blogLimit }),
+      });
+      const raw = await res.text();
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch (parseErr) {
+        alert(
+          '서버가 JSON이 아닌 응답(보통 HTML)을 보냈습니다. HTTP ' + res.status + '\n\n'
+          + '흔한 원인: (1) app.py를 저장한 뒤 서버를 재시작하지 않음 (2) 이 주소에 라우트 없음·다른 앱이 떠 있음 (3) Flask 오류 페이지\n\n'
+          + '응답 앞부분:\n' + raw.slice(0, 280)
+        );
+        status.textContent = '';
+        return;
+      }
+      if (data.error) {
+        alert(data.error);
+        status.textContent = '';
+        return;
+      }
+      naverKwRowsAll = data.rows || [];
+      naverKwSearchCol = _naverSeedForSearchColumn(seed);
+      document.getElementById('naver-kw-sort-key').value = 'ratio';
+      document.getElementById('naver-kw-sort-dir').value = 'asc';
+      applyNaverKwSort();
+    } catch (e) {
+      alert('요청 실패: ' + (e && e.message ? e.message : e));
+      status.textContent = '';
+    } finally {
+      hideKwProgress();
+      btn.disabled = false;
+    }
+  }
+
+  /** 키워드 textarea 안에 이미 등장하는 토큰(줄마다 쉼표 분리) 집합 */
+  function _existingKeywordTokensInTextarea(text) {
+    const set = new Set();
+    String(text || '').split('\n').forEach(line => {
+      line.split(',').forEach(part => {
+        const t = part.trim();
+        if (t) set.add(t);
+      });
+    });
+    return set;
+  }
+
+  function appendCheckedNaverKeywords() {
+    const picked = [];
+    document.querySelectorAll('.naver-kw-row-chk:checked').forEach(ch => {
+      const i = +ch.getAttribute('data-i');
+      const r = naverKwRows[i];
+      if (r && r.relKeyword && String(r.relKeyword).trim()) picked.push(String(r.relKeyword).trim());
+    });
+    if (!picked.length) { alert('추가할 키워드를 표에서 선택하세요.'); return; }
+    const ta = document.getElementById('keywords');
+    const existing = _existingKeywordTokensInTextarea(ta.value);
+    const seen = new Set();
+    const toAdd = [];
+    for (const kw of picked) {
+      if (existing.has(kw) || seen.has(kw)) continue;
+      seen.add(kw);
+      toAdd.push(kw);
+    }
+    if (!toAdd.length) {
+      alert('선택한 키워드는 이미 키워드 칸에 있어 추가하지 않았습니다.');
+      return;
+    }
+    const cur = ta.value.replace(/\s+$/, '');
+    ta.value = (cur ? cur + '\n' : '') + toAdd.join('\n');
+    ta.focus();
+  }
+
+  // ── 포스팅 큐 ──────────────────────────────────────────────────
+
+  async function postQueueWithItems(items, options = {}) {
+    const replaceSnapshot = options.replaceSnapshot !== false;
+    if (!items.length) {
+      alert('포스팅할 항목이 없습니다.');
+      return;
+    }
+    const btn = document.getElementById('btn-post-queue');
+    btn.disabled = true;
+    if (replaceSnapshot) {
+      lastQueueItemsSnapshot = JSON.parse(JSON.stringify(items));
+    }
+    updateRetryPostButtonVisibility();
+    document.getElementById('queue-status').style.display = 'block';
+    setQueueStatus('running', `포스팅 준비 중... (0/${items.length})`);
+
+    try {
+      const res = await fetch('/post_queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setQueueStatus('error', data.error);
+        updatePostQueueButtonState();
+        return;
+      }
+      startPolling();
+    } catch (e) {
+      setQueueStatus('error', '네트워크 오류: ' + e.message);
+      updatePostQueueButtonState();
+    }
+  }
+
+  async function retryFailedPosting() {
+    if (pollingTimer || !lastQueueItemsSnapshot || !lastQueueItemsSnapshot.length) return;
+    const items = [];
+    for (const entry of lastQueueItemsSnapshot) {
+      const i = entry.idx;
+      if (typeof i !== 'number' || !cards[i]) continue;
+      if (cards[i].state === 'done') continue;
+      const titleEl = document.getElementById(`title-${i}`);
+      const bodyEl = document.getElementById(`body-${i}`);
+      if (!titleEl || !bodyEl) continue;
+      items.push({
+        title: titleEl.value.trim(),
+        body: bodyEl.value.trim(),
+        clinic_name: entry.clinic_name != null ? entry.clinic_name : (cards[i].clinicName || ''),
+        cardnews_session: entry.cardnews_session != null ? entry.cardnews_session : (cards[i].cardnewsSession || ''),
+        profile_name: entry.profile_name || '',
+        account_id: (entry.account_id || cards[i].accountId || resolveAccountIdByClinic(cards[i].clinicName) || '__env__').trim() || '__env__',
+        idx: i,
+      });
+    }
+    if (!items.length) {
+      alert('재시도할 실패·미완료 항목이 없습니다.');
+      return;
+    }
+    await postQueueWithItems(items, { replaceSnapshot: false });
+  }
+
+  async function startQueue() {
+    // 체크된 항목의 최신 title/body 수집
+    const items = [];
+    cards.forEach((c, i) => {
+      if (!c.checked || c.state === 'error') return;
+
+      const accountId = (c.accountId || resolveAccountIdByClinic(c.clinicName) || '__env__').trim();
+
+      items.push({
+        title: document.getElementById(`title-${i}`).value.trim(),
+        body: document.getElementById(`body-${i}`).value.trim(),
+        clinic_name: c.clinicName || '',
+        cardnews_session: c.cardnewsSession || '',
+        profile_name: '',
+        account_id: accountId || '__env__',
+        idx: i,
+      });
+    });
+
+    if (!items.length) {
+      alert('포스팅할 항목이 없습니다.\n체크박스를 확인해주세요.');
+      return;
+    }
+
+    await postQueueWithItems(items);
+  }
+
+  function startPolling() {
+    if (pollingTimer) clearInterval(pollingTimer);
+    pollingTimer = setInterval(async () => {
+      try {
+        const res = await fetch('/status');
+        const data = await res.json();
+
+        // 진행 바
+        const pct = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
+        document.getElementById('progress-fill').style.width = pct + '%';
+        document.getElementById('progress-label').textContent =
+          data.total > 0 ? `${data.current} / ${data.total}` : '';
+
+        setQueueStatus(data.state, data.message);
+
+        // 카드별 상태 반영 (서버가 준 idx로 매핑 — 체크 순서와 무관)
+        if (data.items && data.items.length) {
+          data.items.forEach(qi => {
+            if (typeof qi.idx !== 'number') return;
+            if (!cards[qi.idx]) return;
+            updateCardState(qi.idx, qi.state, qi.message);
+          });
+        }
+
+        if (data.state === 'done' || data.state === 'error') {
+          clearInterval(pollingTimer);
+          pollingTimer = null;
+          const btn = document.getElementById('btn-post-queue');
+          if (data.state === 'done') {
+            btn.disabled = false;
+            btn.textContent = '↺ 초기화';
+            btn.onclick = resetAll;
+            btn.style.background = '#475569';
+          }
+          updatePostQueueButtonState();
+        }
+      } catch {}
+    }, 1500);
+  }
+
+  function setQueueStatus(state, msg) {
+    const box = document.getElementById('status-msg-box');
+    const spinner = document.getElementById('status-spinner');
+    box.className = `status-msg-box ${state}`;
+    document.getElementById('status-msg-text').textContent = msg;
+    spinner.style.display = state === 'running' ? 'block' : 'none';
+  }
+
+  // ── 초기화 ────────────────────────────────────────────────────
+
+  function resetAll() {
+    if (pollingTimer) {
+      clearInterval(pollingTimer);
+      pollingTimer = null;
+    }
+    lastQueueItemsSnapshot = null;
+    cards = [];
+    document.getElementById('keywords').value = '';
+    document.getElementById('result-list').innerHTML = '';
+    document.getElementById('results-section').style.display = 'none';
+    document.getElementById('queue-status').style.display = 'none';
+    const btn = document.getElementById('btn-post-queue');
+    btn.textContent = '🚀 선택 포스팅 시작';
+    btn.onclick = startQueue;
+    btn.style.background = '';
+    updatePostQueueButtonState();
+    updateRetryPostButtonVisibility();
+    clearAllSlots();
+    focusAccountsSection();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // ── 초기 로드 ─────────────────────────────────────────────────
+  loadClinics()
+    .then(() => loadMultiAccounts())
+    .then(() => loadAccountSettings())
+    .then(() => loadStartupHints())
+    .then(() => {
+      updateActiveAccountDisplay();
+      renderSlots();
+      updatePostQueueButtonState();
+    });
+
+  window.addEventListener('focus', () => {
+    loadStartupHints();
+  });
+</script>
+
+</body>
+</html>

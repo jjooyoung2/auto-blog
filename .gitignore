@@ -1,0 +1,13 @@
+.env
+.env.*
+blog_accounts.json
+**/venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+build/
+*.spec.bak
+chrome_profile/
+chrome_accounts/
+clinic_profiles/
