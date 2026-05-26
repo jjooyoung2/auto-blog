@@ -71,7 +71,9 @@
     <div class="card-title">블로그 본문 생성</div>
     <p class="blog-gen-howto">
       <strong>사용 순서:</strong> 위 <strong>계정관리</strong>에서 라디오로 <strong>작업할 계정</strong>을 하나 고른 뒤, 아래 탭에서 방식을 고르고 키워드 또는 카드뉴스 이미지를 넣어 <strong>본문 생성</strong>을 누르세요.
-      생성된 글은 아래 목록에 쌓이며, 같은 계정으로 포스팅됩니다. 키워드 생성 시 참고 이미지는 <code>src/치과명/img</code>에서, 치과명은 선택한 계정에 저장된 이름을 씁니다.
+      생성된 글은 아래 목록에 쌓이며, 같은 계정으로 포스팅됩니다.<br>본문 생성 시 삽입되는 이미지는 <code>src/계정관리에서 선택한 치과명 폴더/img</code>에서 불러옵니다.
+      일치하는 치과명 폴더가 없을때는 <code>src/img</code>에서 불러옵니다.<br>
+      폴더 이미지를 사용하지 않고 ai생성 이미지를 사용하려면 아래 'AI이미지생성' 옵션을 체크해주세요.
     </p>
 
     <!-- 모드 탭 (기본: 카드뉴스 이미지) -->
@@ -169,8 +171,16 @@
       </div>
 
       <div class="btn-row gen-btn-row">
-        <label class="gen-char-label" for="input-target-chars-kw">글자수</label>
-        <input type="number" class="gen-char-input" id="input-target-chars-kw" min="300" max="12000" step="100" inputmode="numeric" placeholder="기본" title="비우면 기존 분량. 숫자 입력 시 공백 제외 기준으로 대략 그 길이에 맞춤(300~12000)" />
+        <span class="gen-option-group gen-ai-img-group">
+          <label class="gen-ai-img-label" title="체크하면 src 폴더 사진 대신 AI가 본문용 삽화를 생성합니다(시간·API 사용). 모델: .env GEMINI_IMAGE_MODEL">
+            <input type="checkbox" id="chk-ai-keyword-images" />
+            AI이미지생성
+          </label>
+        </span>
+        <span class="gen-option-group gen-char-group">
+          <label class="gen-char-label" for="input-target-chars-kw">글자수</label>
+          <input type="number" class="gen-char-input" id="input-target-chars-kw" min="300" max="12000" step="100" inputmode="numeric" placeholder="기본" title="비우면 기존 분량. 숫자 입력 시 공백 제외 기준으로 대략 그 길이에 맞춤(300~12000)" />
+        </span>
         <button class="btn btn-primary" id="btn-generate" onclick="generateAll()">✨ 본문 생성</button>
         <button class="btn btn-ghost" onclick="resetAll()">↺ 초기화</button>
       </div>
@@ -907,6 +917,8 @@
         const genPayload = { keywords: kws, clinic_name: clinicName };
         const tcKw = getOptionalTargetCharCount('input-target-chars-kw');
         if (tcKw !== undefined) genPayload.target_char_count = tcKw;
+        const chkAi = document.getElementById('chk-ai-keyword-images');
+        if (chkAi && chkAi.checked) genPayload.use_ai_images = true;
         const res = await fetch('/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -918,6 +930,7 @@
         cards[i].body = data.body;
         cards[i].images = data.images || [];
         cards[i].clinicName = data.clinic_name || clinicName;
+        cards[i].cardnewsSession = data.cardnews_session || '';
         cards[i].profileName = clinicName;
         cards[i].checked = true;
         updateCardState(i, 'ready');

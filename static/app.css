@@ -433,7 +433,22 @@
       background: #dc2626; color: #fff; letter-spacing: 0.02em;
     }
     .gen-btn-row {
-      display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+    }
+    .gen-option-group {
+      display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px;
+    }
+    .gen-ai-img-group {
+      padding: 6px 14px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .gen-char-group {
+      padding-left: 16px;
+      margin-left: 2px;
+      border-left: 2px solid #e2e8f0;
+      gap: 10px;
     }
     .gen-char-label {
       font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap;
@@ -442,6 +457,11 @@
       width: 100px; padding: 8px 10px; font-size: 13px; border-radius: 8px;
       border: 1.5px solid var(--border); font-family: inherit; background: #fff;
     }
+    .gen-ai-img-label {
+      display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700;
+      color: var(--text); cursor: pointer; user-select: none;
+    }
+    .gen-ai-img-label input { width: 15px; height: 15px; accent-color: var(--primary); cursor: pointer; }
 
     /* 전체 진행 상태 바 */
     #queue-status { display: none; }

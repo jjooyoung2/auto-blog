@@ -2,6 +2,10 @@ import sys
 
 import os
 
+import atexit
+
+import shutil
+
 import traceback
 
 import base64
@@ -190,6 +194,50 @@ TMP_DIR = os.path.join(BASE_DIR, "tmp")
 
 
 
+def _clear_blog_tmp_dir() -> None:
+
+    """카드뉴스·키워드 AI 이미지 등 세션용 tmp 하위만 삭제. 실패는 무시."""
+
+    try:
+
+        if not os.path.isdir(TMP_DIR):
+
+            return
+
+        for name in os.listdir(TMP_DIR):
+
+            path = os.path.join(TMP_DIR, name)
+
+            try:
+
+                if os.path.isdir(path):
+
+                    shutil.rmtree(path, ignore_errors=True)
+
+                elif os.path.isfile(path) or os.path.islink(path):
+
+                    try:
+
+                        os.remove(path)
+
+                    except OSError:
+
+                        pass
+
+            except Exception:
+
+                pass
+
+    except Exception:
+
+        pass
+
+
+
+atexit.register(_clear_blog_tmp_dir)
+
+
+
 class _NoStatusLog(logging.Filter):
 
     def filter(self, record):
@@ -231,6 +279,11 @@ MULTIMODAL_MODEL = "gemini-2.5-flash"
 MULTIMODAL_FALLBACK = "gemini-2.5-flash-lite"
 
 client = genai.Client(api_key=API_KEY)
+
+
+
+# 키워드 탭「AI 이미지 생성」— 본문에 삽입할 고정 파일명(.env 의 GEMINI_IMAGE_MODEL 로 생성)
+KEYWORD_AI_IMAGE_FILENAMES = [f"kw_ai_{i}.png" for i in range(1, 5)]
 
 
 
@@ -683,6 +736,8 @@ def generate_blog_content(
 
     target_char_count: int | None = None,
 
+    use_ai_images: bool = False,
+
 ) -> dict:
 
     """keywords: 하나 이상의 키워드 리스트. 여러 개면 하나의 글에 모두 녹여쓰기."""
@@ -733,7 +788,7 @@ def generate_blog_content(
 
 
 
-        if all_images:
+        if all_images and not use_ai_images:
 
             selected_images = random.sample(all_images, min(4, len(all_images)))
 
@@ -793,7 +848,19 @@ def generate_blog_content(
 
         system_instr += f"\n\n작성하는 블로그 글은 '{clinic_name}' 치과의 공식 블로그 글입니다. 치과명을 본문에서 자연스럽게 언급해주세요."
 
-    if use_multimodal:
+    if use_ai_images:
+
+        fixed = "\n".join(f"- {f}" for f in KEYWORD_AI_IMAGE_FILENAMES)
+
+        system_instr += (
+
+            f"\n\n[AI 이미지 모드] `src` 폴더의 사진은 본문에 쓰지 않습니다. 아래 4개 **파일명**만 사용하세요."
+
+            f" 각 소제목에 맞는 문단 아래에 `[이미지: 파일명]` 형식으로 한 줄씩 넣고, 4개를 모두 빠짐없이 사용하세요.\n{fixed}"
+
+        )
+
+    elif use_multimodal:
 
         fname_list = "\n".join(f"- {f}" for f in ai_images)
 
@@ -1005,13 +1072,13 @@ def generate_blog_content(
 
     # ?동 ?정 ?스 (치과??일, ??, 말투 ????
 
-        if clinic_name:
+    if clinic_name:
 
-            title, body = _apply_fixes(title, body, clinic_name)
+        title, body = _apply_fixes(title, body, clinic_name)
 
-            if selected_images:
+        if selected_images:
 
-                body = normalize_image_markers(body, selected_images)
+            body = normalize_image_markers(body, selected_images)
 
 
 
@@ -1055,9 +1122,35 @@ def generate_blog_content(
 
 
 
-    # ?네???서?본문 ?장 ?서??맞게 ?렬
+    ai_session = ""
 
-    ordered_images = _order_images_by_body(body, selected_images)
+
+
+    if use_ai_images:
+
+        ai_session, ai_files = _generate_keyword_ai_images_to_tmp(title, body, keywords, clinic_name)
+
+        img_dir = os.path.join(TMP_DIR, ai_session)
+
+        body = _remove_image_marker_lines_not_on_disk(body, img_dir)
+
+        body = _ensure_keyword_ai_image_markers(body, ai_files)
+
+        body = normalize_image_markers(body, ai_files)
+
+        if clinic_name:
+
+            title, body = _apply_fixes(title, body, clinic_name)
+
+            body = normalize_image_markers(body, ai_files)
+
+        selected_images = ai_files
+
+        ordered_images = _order_images_by_body(body, ai_files)
+
+    else:
+
+        ordered_images = _order_images_by_body(body, selected_images)
 
 
 
@@ -1074,6 +1167,8 @@ def generate_blog_content(
         "clinic_name": clinic_name,
 
         "multimodal": use_multimodal,
+
+        "cardnews_session": ai_session,
 
     }
 
@@ -2052,6 +2147,192 @@ def ensure_logged_in(driver, naver_id: str = "", naver_pw: str = "") -> bool:
 # [??지: ?일? ?턴
 
 IMAGE_RE = re.compile(r'\[이미지:\s*([^\]]+)\]')
+
+
+
+def _gemini_image_model_id() -> str:
+
+    return (os.environ.get("GEMINI_IMAGE_MODEL") or "gemini-2.5-flash-image").strip() or "gemini-2.5-flash-image"
+
+
+
+def _genai_response_image_bytes_list(response) -> list:
+
+    out = []
+
+    for cand in getattr(response, "candidates", None) or []:
+
+        content = getattr(cand, "content", None)
+
+        parts = getattr(content, "parts", None) if content else None
+
+        for p in parts or []:
+
+            inline = getattr(p, "inline_data", None)
+
+            if inline is None and hasattr(p, "inlineData"):
+
+                inline = getattr(p, "inlineData", None)
+
+            if inline is None:
+
+                continue
+
+            data = getattr(inline, "data", None)
+
+            if data is None:
+
+                continue
+
+            out.append(data if isinstance(data, (bytes, bytearray)) else bytes(data))
+
+    return out
+
+
+
+def _remove_image_marker_lines_not_on_disk(body: str, img_dir: str) -> str:
+
+    lines = []
+
+    for ln in (body or "").splitlines():
+
+        m = re.match(r"^\s*\[이미지:\s*([^\]]+)\]\s*$", ln)
+
+        if m:
+
+            fn = m.group(1).strip()
+
+            if os.path.isfile(os.path.join(img_dir, fn)):
+
+                lines.append(ln)
+
+            continue
+
+        lines.append(ln)
+
+    return "\n".join(lines)
+
+
+
+def _ensure_keyword_ai_image_markers(body: str, filenames: list) -> str:
+
+    present = set()
+
+    for m in IMAGE_RE.finditer(body or ""):
+
+        present.add(m.group(1).strip())
+
+    missing = [f for f in filenames if f not in present]
+
+    if not missing:
+
+        return body or ""
+
+    tail = "\n\n" + "\n".join(f"[이미지: {f}]" for f in missing)
+
+    return (body or "").rstrip() + tail
+
+
+
+def _generate_keyword_ai_images_to_tmp(
+
+    title: str,
+
+    body: str,
+
+    keywords: list,
+
+    clinic_name: str,
+
+) -> tuple[str, list[str]]:
+
+    """키워드 본문용 AI 이미지를 tmp 세션에 저장. (session_id, 생성된 파일명 리스트)"""
+
+    session_id = uuid.uuid4().hex[:12]
+
+    img_dir = os.path.join(TMP_DIR, session_id)
+
+    os.makedirs(img_dir, exist_ok=True)
+
+    model = _gemini_image_model_id()
+
+    kw = ", ".join((keywords or [])[:8])
+
+    title_s = (title or "")[:200]
+
+    snippet = (body or "").replace("\r", "")[:900]
+
+    clinic_bit = (clinic_name or "").strip() or "dental health"
+
+    safe_lead = (
+
+        "Editorial blog illustration: friendly abstract shapes, soft blue and white palette, clean flat vector feel, "
+
+        "dental health education theme, no gore, no surgery, no blood, no photorealistic recognizable human faces, "
+
+        "no readable text or logos inside the image."
+
+    )
+
+    cfg = types.GenerateContentConfig(
+
+        response_modalities=["IMAGE"],
+
+        image_config=types.ImageConfig(aspect_ratio="1:1"),
+
+    )
+
+    wrote: list[str] = []
+
+    ntot = len(KEYWORD_AI_IMAGE_FILENAMES)
+
+    for i, fname in enumerate(KEYWORD_AI_IMAGE_FILENAMES, 1):
+
+        prompt = (
+
+            f"{safe_lead}\n"
+
+            f"Korean blog context (do not render this text in the image): clinic theme: {clinic_bit}; keywords: {kw}.\n"
+
+            f"Article title (do not print as text): {title_s}\n"
+
+            f"Match the tone of this excerpt in abstract visuals only (no overlaid text): {snippet[:420]}\n"
+
+            f"Slide {i} of {ntot} — composition must differ clearly from other slides."
+
+        )
+
+        try:
+
+            resp = client.models.generate_content(model=model, contents=prompt, config=cfg)
+
+            blobs = _genai_response_image_bytes_list(resp)
+
+            if not blobs:
+
+                logging.warning("keyword AI image: empty parts model=%s file=%s", model, fname)
+
+                continue
+
+            with open(os.path.join(img_dir, fname), "wb") as fh:
+
+                fh.write(blobs[0])
+
+            wrote.append(fname)
+
+        except Exception as e:
+
+            logging.warning("keyword AI image fail %s: %s", fname, e)
+
+    if not wrote:
+
+        raise RuntimeError(
+
+            f"AI 이미지를 생성하지 못했습니다. 모델 '{model}'·API 할당량·안전 필터를 확인하거나 잠시 후 다시 시도하세요."
+
+        )
+
+    return session_id, wrote
 
 
 
@@ -3871,9 +4152,21 @@ def generate():
 
     target_chars = _parse_target_char_count(data.get("target_char_count"))
 
+    use_ai_images = bool(data.get("use_ai_images"))
+
     try:
 
-        result = generate_blog_content(keywords, clinic_name, target_char_count=target_chars)
+        result = generate_blog_content(
+
+            keywords,
+
+            clinic_name,
+
+            target_char_count=target_chars,
+
+            use_ai_images=use_ai_images,
+
+        )
 
         return jsonify(result)
 
@@ -4608,6 +4901,10 @@ def review_content():
 if __name__ == "__main__":
 
     multiprocessing.freeze_support()
+
+    os.makedirs(TMP_DIR, exist_ok=True)
+
+    _clear_blog_tmp_dir()
 
 
 
