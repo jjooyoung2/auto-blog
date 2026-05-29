@@ -542,6 +542,43 @@
     }
     .btn-account-remove:hover { background: #f8fafc; color: var(--text); }
 
+    /* ── 포스팅 완료 모달 ─────────────────────────────── */
+    .post-done-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(15, 23, 42, 0.55);
+      z-index: 9000;
+      align-items: center;
+      justify-content: center;
+    }
+    .post-done-overlay.active { display: flex; }
+    .post-done-modal {
+      background: #fff;
+      border-radius: 14px;
+      padding: 32px 28px 24px;
+      width: min(380px, 92vw);
+      box-shadow: 0 8px 32px rgba(15,23,42,0.18);
+      text-align: center;
+    }
+    .post-done-modal .pdm-icon { font-size: 36px; margin-bottom: 10px; }
+    .post-done-modal .pdm-title {
+      font-size: 17px; font-weight: 700; color: var(--text); margin-bottom: 8px;
+    }
+    .post-done-modal .pdm-desc {
+      font-size: 13.5px; color: var(--muted); line-height: 1.6; margin-bottom: 24px;
+    }
+    .post-done-modal .pdm-btns {
+      display: flex; gap: 10px; justify-content: center;
+    }
+    .post-done-modal .pdm-btns button {
+      flex: 1; padding: 10px 0; border-radius: 8px; border: none;
+      font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
+      transition: opacity .15s;
+    }
+    .post-done-modal .pdm-btns button:hover { opacity: 0.85; }
+    .pdm-btn-yes   { background: var(--primary); color: #fff; }
+    .pdm-btn-manual { background: #f1f5f9; color: var(--text); border: 1.5px solid var(--border) !important; }
+
     @media (max-width: 600px) {
       .card { padding: 18px 14px; }
       .accounts-table-wrap { overflow-x: auto; }

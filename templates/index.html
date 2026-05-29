@@ -1715,6 +1715,11 @@
             btn.textContent = '↺ 초기화';
             btn.onclick = resetAll;
             btn.style.background = '#475569';
+            // 개별 아이템 중 실패가 없을 때만 모달 표시
+            const hasItemError = (data.items || []).some(it => it.state === 'error');
+            if (!hasItemError) {
+              document.getElementById('post-done-overlay').classList.add('active');
+            }
           }
           updatePostQueueButtonState();
         }
@@ -1754,6 +1759,16 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  // ── 포스팅 완료 모달 ─────────────────────────────────────────
+  function postDoneConfirm() {
+    document.getElementById('post-done-overlay').classList.remove('active');
+    resetAll();
+  }
+  function postDoneManual() {
+    document.getElementById('post-done-overlay').classList.remove('active');
+    // 본문 그대로 유지 — 버튼은 이미 '↺ 초기화'로 바뀐 상태
+  }
+
   // ── 초기 로드 ─────────────────────────────────────────────────
   loadClinics()
     .then(() => loadMultiAccounts())
@@ -1769,6 +1784,19 @@
     loadStartupHints();
   });
 </script>
+
+<!-- ── 포스팅 완료 모달 ─────────────────────────────── -->
+<div id="post-done-overlay" class="post-done-overlay" role="dialog" aria-modal="true">
+  <div class="post-done-modal">
+    <div class="pdm-icon">✅</div>
+    <div class="pdm-title">포스팅 완료</div>
+    <div class="pdm-desc">포스팅 완료된 글은 초기화됩니다.<br>지금 바로 초기화할까요?</div>
+    <div class="pdm-btns">
+      <button class="pdm-btn-yes" onclick="postDoneConfirm()">예</button>
+      <button class="pdm-btn-manual" onclick="postDoneManual()">수동 초기화</button>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>
